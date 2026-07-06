@@ -1,0 +1,7 @@
+services:
+  parts-price-puller:
+    image: ghcr.io/thvjq/parts-price-puller:latest
+    build: .
+    container_name: parts-price-puller
+    restart: unless-stopped
+    env_file: .env

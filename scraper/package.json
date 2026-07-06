@@ -1,0 +1,8 @@
+{
+  "name": "parts-price-puller",
+  "version": "1.0.0",
+  "private": true,
+  "main": "scraper.js",
+  "scripts": { "start": "node scraper.js" },
+  "dependencies": { "playwright": "^1.45.0" }
+}
