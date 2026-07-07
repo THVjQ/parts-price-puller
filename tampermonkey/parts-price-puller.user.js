@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.2.0
+// @version      1.3.0
 // @description  Pulls logged-in part prices from CrazyParts + The Parts Home into Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,7 +22,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.2.0';
+  const SCRIPT_VERSION = '1.3.0';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -34,7 +34,8 @@
   const SITE_DEFS = {
     'crazyparts.com.au': {
       key: 'CP',
-      searchUrl: q => `${location.origin}/?s=${encodeURIComponent(q)}&post_type=product`,
+      // Next.js/CrazyPOS storefront — real search path (products embedded as JSON, not DOM)
+      searchUrl: q => `${location.origin}/products/search/${encodeURIComponent(q)}`,
       item:  'li.product, .product-grid-item, .products .product',
       title: '.woocommerce-loop-product__title, .product-title, h2, h3',
       price: '.price',
@@ -120,6 +121,36 @@
       ontimeout: () => out('❌ Timed out after 60s.'),
       timeout: 60000,
     });
+  }
+
+  // ---------------- Debug: capture a real search page ----------------
+  // Fetches one search in the user's logged-in session and downloads the raw
+  // response so the site's real markup / embedded JSON (with wholesale prices)
+  // can be analysed. Also reports quick stats inline.
+  function captureSearch(query, out) {
+    const url = SITE.searchUrl(query);
+    out('⏳ Fetching (logged-in):\n' + url + '\n…');
+    fetch(url, { credentials: 'include' })
+      .then(r => r.text().then(html => ({ status: r.status, html })))
+      .then(({ status, html }) => {
+        const names   = (html.match(/"name":"/g) || []).length;
+        const priceHits = {};
+        ['member_price','business_account_price_ex_tax','individual_account_price_ex_tax','unit_price_ex_tax','unit_price','origin_price','retail_price','price']
+          .forEach(k => { const n = (html.match(new RegExp('"' + k + '"', 'g')) || []).length; if (n) priceHits[k] = n; });
+        const fname = 'ppp-capture-' + SITE.key + '-' + query.replace(/[^a-z0-9]+/gi, '_') + '.html';
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+        a.download = fname; document.body.appendChild(a); a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+        out(
+          'HTTP ' + status + '  •  ' + html.length + ' bytes\n' +
+          'Downloaded: ' + fname + '\n' +
+          '"name" occurrences: ' + names + '\n' +
+          'price fields seen: ' + (Object.keys(priceHits).length ? JSON.stringify(priceHits) : 'NONE') + '\n' +
+          (names ? '✅ Product JSON is present — send me this file.' : '⚠ No product data — may need login or a different URL.')
+        );
+      })
+      .catch(e => out('❌ ' + e.message));
   }
 
   // ---------------- Matching engine ----------------
@@ -302,6 +333,7 @@
           <details id="ppp-debugbox">
             <summary>🐛 Debug</summary>
             <button id="ppp-test" class="sec">Test connection (raw)</button>
+            <button id="ppp-capture" class="sec">Capture search HTML</button>
             <button id="ppp-info" class="sec">Show current settings</button>
             <button id="ppp-copy" class="sec">Copy debug output</button>
             <div id="ppp-debug"></div>
@@ -322,6 +354,11 @@
     el.querySelector('#ppp-pull').onclick = () => runPull(status);
     el.querySelector('#ppp-abort').onclick = () => { abortFlag = true; };
     el.querySelector('#ppp-test').onclick = () => { el.querySelector('#ppp-debugbox').open = true; debug('Running…'); rawTest(debug); };
+    el.querySelector('#ppp-capture').onclick = () => {
+      const q = prompt('Search query to capture (do this while logged in):', 'iphone 12 lcd');
+      if (q === null) return;
+      el.querySelector('#ppp-debugbox').open = true; debug('Capturing…'); captureSearch(q.trim(), debug);
+    };
     el.querySelector('#ppp-info').onclick = () => {
       const u = getUrl(), k = getKey();
       debug(
