@@ -34,8 +34,12 @@ const PARTS = [
 
 const SITES = [
   { key: 'CP',  label: 'CrazyParts' },
-  { key: 'TPH', label: 'The Parts Home' },
 ];
+
+// Cell background used to mark a price a human typed in. Pulls never overwrite these.
+const MANUAL_BLUE = '#cfe2ff';
+// Neutral (no change / first value)
+const NEUTRAL_BG  = '#ffffff';
 
 // ---------------------------------------------------------------- MENU
 function onOpen() {
@@ -82,16 +86,20 @@ function setupSheets() {
 
     // Query templates — fully editable. {device} {grade} substituted by scrapers.
     cf.getRange('A9:E9').setValues([['Part Key', 'Query Template', 'Must-match keywords (; any-of)', 'Exclude keywords (; separated)', 'Notes']]).setFontWeight('bold');
+    // Must-match is ANY-OF; exclude is a kill-list. On CrazyParts real screens are
+    // named "… LCD Assembly …" / "… OLED Assembly …", so requiring "assembly" throws
+    // out films, polarizers, stencils, moulds, packs, tools etc. that used to win on price.
+    const ACC = 'stencil;mould;mold;alignment;polarizer;film;filter;pack;sticker;foam;adhesive;tape;protector;laminating;mesh;oca;backlight;bezel;frame only;tool;jig;remover';
     cf.getRange('A10:E18').setValues([
-      ['LCD',        '{device} LCD {grade}',          'lcd',                          'oled;refurb;service pack;frame only', ''],
-      ['OLED',       '{device} OLED {grade}',         'oled;amoled',                  'refurb;service pack;incell;lcd',      ''],
-      ['REFURB',     '{device} refurbished screen',   'refurb',                       'battery;camera',                      ''],
-      ['SP',         '{device} service pack screen',  'service pack;genuine',         'battery;camera;back glass',           ''],
-      ['BAT_AM',     '{device} battery',              'battery',                      'service pack;genuine;cover;case;door', ''],
-      ['BAT_SP',     '{device} battery service pack', 'service pack;genuine',         'screen;lcd;oled',                     ''],
-      ['CAM_REAR',   '{device} rear camera',          'rear camera;back camera;main camera', 'lens only;glass;bezel;front', 'lens-only excluded'],
-      ['CAM_FRONT',  '{device} front camera',         'front camera',                 'lens;rear;back camera',               ''],
-      ['BACK_GLASS', '{device} back glass',           'back glass;rear glass;back cover;battery cover', 'camera lens;screen;lcd;oled', ''],
+      ['LCD',        '{device} LCD {grade}',          'lcd assembly',                 'oled;refurb;service pack;' + ACC,     'needs "assembly"'],
+      ['OLED',       '{device} OLED {grade}',         'oled assembly;amoled assembly','refurb;service pack;incell;lcd;' + ACC, 'needs "assembly"'],
+      ['REFURB',     '{device} refurb LCD assembly',  'refurb',                       'service pack;' + ACC,                 ''],
+      ['SP',         '{device} service pack screen',  'service pack;genuine;apple',   'battery;camera;back glass;' + ACC,    ''],
+      ['BAT_AM',     '{device} battery',              'battery',                      'service pack;genuine;cover;case;door;tester;' + ACC, ''],
+      ['BAT_SP',     '{device} battery service pack', 'service pack;genuine',         'screen;lcd;oled;' + ACC,              ''],
+      ['CAM_REAR',   '{device} rear camera',          'rear camera;back camera;main camera', 'lens only;glass;bezel;front;' + ACC, 'lens-only excluded'],
+      ['CAM_FRONT',  '{device} front camera',         'front camera',                 'lens;rear;back camera;' + ACC,        ''],
+      ['BACK_GLASS', '{device} back glass',           'back glass;rear glass;back cover;battery cover', 'camera lens;screen;lcd;oled;' + ACC, ''],
     ]);
     cf.setFrozenRows(1);
     cf.autoResizeColumns(1, 5);
@@ -167,15 +175,17 @@ function rebuildPricesGrid() {
   }
 
   sh.clear();
-  const nCols = 1 + PARTS.length * SITES.length;
+  const nSites = SITES.length;
+  const nCols = 1 + PARTS.length * nSites;
   const partHdr = ['Device'], siteHdr = [''];
   PARTS.forEach(p => {
-    partHdr.push(p.key + ' | ' + p.label.replace('{grade}', grade), '');
+    partHdr.push(p.key + ' | ' + p.label.replace('{grade}', grade));
+    for (let k = 1; k < nSites; k++) partHdr.push('');   // pad so each part spans nSites cols
     SITES.forEach(s => siteHdr.push(s.label));
   });
   sh.getRange(1, 1, 1, nCols).setValues([partHdr]).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#ffffff');
   sh.getRange(2, 1, 1, nCols).setValues([siteHdr]).setFontWeight('bold').setBackground('#16213e').setFontColor('#a0c4ff');
-  for (let i = 0; i < PARTS.length; i++) sh.getRange(1, 2 + i * 2, 1, 2).merge();
+  if (nSites > 1) for (let i = 0; i < PARTS.length; i++) sh.getRange(1, 2 + i * nSites, 1, nSites).merge();
 
   const rows = devices.map(d => {
     const row = [d.name];
@@ -304,6 +314,7 @@ function writePrices_(siteKey, results) {
     if (!site) return 0;
     const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_PRICES);
     const data = sh.getDataRange().getValues();
+    const bgs  = sh.getDataRange().getBackgrounds();   // preserve/compare colours in one read
     const partRow = data[0], siteRow = data[1];
 
     // column lookup: part+site → col index
@@ -316,21 +327,62 @@ function writePrices_(siteKey, results) {
     const rowFor = {};
     for (let r = 2; r < data.length; r++) rowFor[String(data[r][0]).trim().toLowerCase()] = r;
 
-    let n = 0;
+    let n = 0, coloured = false;
     const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
     results.forEach(res => {
       const r = rowFor[String(res.device).trim().toLowerCase()];
       const c = colFor[res.part + '|' + site.label];
       if (r === undefined || c === undefined) return;
+      // Never touch a human-entered (blue) cell.
+      if (String(bgs[r][c]).toLowerCase() === MANUAL_BLUE) return;
+
+      const oldNum = parseFloat(data[r][c]);            // NaN if '—' or blank
+      const hasNew = res.price !== null && res.price !== undefined;
+      const newNum = hasNew ? Number(res.price) : NaN;
+
       const cell = sh.getRange(r + 1, c + 1);
-      cell.setValue(res.price === null || res.price === undefined ? '—' : res.price);
+      cell.setValue(hasNew ? newNum : '—');
       cell.setNote((res.title || '') + '\n' + (res.url || '') + '\nPulled: ' + ts);
+      bgs[r][c] = changeColour_(oldNum, newNum);
+      coloured = true;
       n++;
     });
+    if (coloured) sh.getDataRange().setBackgrounds(bgs);
     return n;
   } finally {
     lock.releaseLock();
   }
+}
+
+// Background for a price cell based on how the new price compares to the old one:
+// up → red (deeper for a bigger % rise), down → green (deeper for a bigger drop),
+// unchanged / first value / no result → neutral white.
+function changeColour_(oldNum, newNum) {
+  if (isNaN(newNum)) return NEUTRAL_BG;      // NO MATCH this run — clear any stale colour
+  if (isNaN(oldNum) || oldNum <= 0) return NEUTRAL_BG; // first real value
+  if (newNum === oldNum) return NEUTRAL_BG;
+  const pct = Math.min(Math.abs(newNum - oldNum) / oldNum, 0.5) / 0.5; // 0..1 (caps at ±50%)
+  return newNum > oldNum
+    ? blendHex_('#ffe0e0', '#ff7a7a', pct)   // light → strong red
+    : blendHex_('#e2f6e2', '#79d279', pct);  // light → strong green
+}
+function blendHex_(a, b, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16));
+  const [ar, ag, ab] = p(a), [br, bg, bb] = p(b);
+  const c = (x, y) => Math.round(x + (y - x) * t).toString(16).padStart(2, '0');
+  return '#' + c(ar, br) + c(ag, bg) + c(ab, bb);
+}
+
+// Simple trigger: when YOU type a price into the grid, mark it blue so pulls leave it alone.
+// (Fires on manual edits only — setValue() from the script never triggers onEdit.)
+function onEdit(e) {
+  try {
+    const sh = e.range.getSheet();
+    if (sh.getName() !== SH_PRICES) return;
+    if (e.range.getRow() <= 2 || e.range.getColumn() < 2) return; // headers / device column
+    const val = e.range.getValue();
+    e.range.setBackground(val === '' ? NEUTRAL_BG : MANUAL_BLUE);  // clearing a cell releases the lock
+  } catch (err) { /* onEdit must never throw */ }
 }
 
 function log_(source, site, msg) {

@@ -1,11 +1,11 @@
 /**
- * Parts Price Puller — Willard scheduled scraper v1.2.0
- * Logs into both sites with Playwright, runs the same search/match logic,
+ * Parts Price Puller — Willard scheduled scraper v1.3.0
+ * Logs into CrazyParts with Playwright, runs the same search/match logic,
  * POSTs results to the Apps Script web app. Schedule (day/hour) is read
  * LIVE from the sheet Config tab, so changing it in the sheet just works.
  *
  * ENV (docker-compose.yml): APPS_SCRIPT_URL, API_KEY,
- *   CP_USER, CP_PASS, TPH_USER, TPH_PASS, TZ, RUN_NOW (optional=1)
+ *   CP_USER, CP_PASS, TZ, RUN_NOW (optional=1)
  */
 const { chromium } = require('playwright');
 
@@ -29,14 +29,8 @@ const API_KEY = process.env.API_KEY;
 //   page. The selectors below are a best guess — capture the real login form fields
 //   from the site and update userSel/passSel/submitSel/loggedInSel if login fails.
 //
-// The Parts Home (mode 'dom') is still WooCommerce HTML — classic selector scraping.
 const CP_SEARCH_ACTION = '704b975d6057afa591a7ded065387da6e10b829c47';
 const CP_STATE_TREE = '%5B%22%22%2C%7B%22children%22%3A%5B%22(site)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C16%5D';
-
-const TPH_ITEM  = 'li.product, .product-grid-item, .products .product, li.product-item';
-const TPH_TITLE = '.woocommerce-loop-product__title, .product-title, .product-item-link, h2, h3';
-const TPH_PRICE = '.price, .price-box';
-const TPH_LINK  = 'a.woocommerce-LoopProduct-link, .product-item-link, a';
 
 const SITES = [
   {
@@ -51,18 +45,6 @@ const SITES = [
     loggedInSel: 'a[href*="account"], a[href*="logout"], [class*="account"]',
     searchAction: CP_SEARCH_ACTION, stateTree: CP_STATE_TREE,
     searchPageUrl: q => `https://www.crazyparts.com.au/products/search/${encodeURIComponent(q)}`,
-  },
-  {
-    key: 'TPH',
-    mode: 'dom',
-    base: 'https://thepartshome.com.au',
-    loginUrl: 'https://thepartshome.com.au/my-account/',
-    user: process.env.TPH_USER, pass: process.env.TPH_PASS,
-    userSel: '#username', passSel: '#password',
-    submitSel: 'button[name="login"], button[type="submit"]',
-    loggedInSel: '.woocommerce-MyAccount-navigation, a[href*="logout"]',
-    searchUrl: q => `https://thepartshome.com.au/?s=${encodeURIComponent(q)}&post_type=product`,
-    item: TPH_ITEM, title: TPH_TITLE, price: TPH_PRICE, link: TPH_LINK,
   },
 ];
 // ═════════════════════ END EDIT ME ═════════════════════
@@ -150,9 +132,11 @@ const MODEL_SUFFIXES = ['pro', 'max', 'plus', 'ultra', 'mini', 'fe', 'e'];
 const lastNumToken = s => (s.match(/\d+[a-z]*/g) || ['\u0000']).pop();
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Whole-word test — so "plus" does NOT match inside "AMPLUS", "pro" not inside "protection".
+const hasWord = (hay, t) => new RegExp('(^|[^a-z0-9])' + escapeRe(t) + '($|[^a-z0-9])').test(hay);
 function titleMatchesDevice(titleN, device) {
   const toks = norm(device.search).split(' ').filter(Boolean);
-  for (const t of toks) if (!titleN.includes(t)) return false;
+  for (const t of toks) if (!hasWord(titleN, t)) return false;
   const devN = norm(device.search);
   for (const suf of MODEL_SUFFIXES) {
     if (!devN.includes(' ' + suf) && new RegExp('\\b' + escapeRe(lastNumToken(devN)) + '\\s+' + suf + '\\b').test(titleN)) return false;

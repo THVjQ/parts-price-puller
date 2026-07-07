@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.5.0
-// @description  Pulls logged-in part prices from CrazyParts + The Parts Home into Google Sheet
+// @version      1.6.0
+// @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
 // @supportURL   https://github.com/THVjQ/parts-price-puller/issues
@@ -10,8 +10,6 @@
 // @downloadURL  https://raw.githubusercontent.com/THVjQ/parts-price-puller/main/tampermonkey/parts-price-puller.user.js
 // @match        https://crazyparts.com.au/*
 // @match        https://www.crazyparts.com.au/*
-// @match        https://thepartshome.com.au/*
-// @match        https://www.thepartshome.com.au/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -22,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.5.0';
+  const SCRIPT_VERSION = '1.6.0';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -52,25 +50,12 @@
   const CP_SEARCH_ACTION = '704b975d6057afa591a7ded065387da6e10b829c47';
   const CP_STATE_TREE = '%5B%22%22%2C%7B%22children%22%3A%5B%22(site)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C16%5D';
 
-  // The Parts Home is still a WooCommerce-style site rendered as HTML, so it uses
-  // classic selector scraping. If a selector misses, Inspect a product tile + adjust.
-  const TPH_ITEM  = 'li.product, .product-grid-item, .products .product, li.product-item';
-  const TPH_TITLE = '.woocommerce-loop-product__title, .product-title, .product-item-link, h2, h3';
-  const TPH_PRICE = '.price, .price-box';
-  const TPH_LINK  = 'a.woocommerce-LoopProduct-link, .product-item-link, a';
-
   const SITE_DEFS = {
     'crazyparts.com.au': {
       key: 'CP',
       mode: 'rsc',                                   // Next.js server-action JSON, not HTML
       fetchProducts: cpFetchProducts,
       searchPageUrl: q => `${location.origin}/products/search/${encodeURIComponent(q)}`, // human link for notes
-    },
-    'thepartshome.com.au': {
-      key: 'TPH',
-      mode: 'dom',                                   // WooCommerce HTML scraping
-      searchUrl: q => `${location.origin}/?s=${encodeURIComponent(q)}&post_type=product`,
-      item: TPH_ITEM, title: TPH_TITLE, price: TPH_PRICE, link: TPH_LINK,
     },
   };
   // ═════════════════════ END EDIT ME ═════════════════════
@@ -146,54 +131,21 @@
     });
   }
 
-  // ---------------- Debug: capture a real search page ----------------
-  // Fetches one search in the user's logged-in session and downloads the raw
-  // response so the site's real markup / embedded JSON (with wholesale prices)
-  // can be analysed. Also reports quick stats inline.
+  // ---------------- Debug: capture a real search ----------------
+  // Runs one CrazyParts server-action search in your logged-in session and shows
+  // what parsed, so you can tell connectivity problems from matching problems.
   function captureSearch(query, out) {
-    if (SITE.mode === 'rsc') {
-      out('⏳ CrazyParts server-action search (logged-in):\n["' + query + '",1,20]\n…');
-      SITE.fetchProducts(query, 20).then(items => {
-        const first = items[0];
-        out(
-          'products parsed: ' + items.length + '\n' +
-          (first ? 'first: ' + first.title.slice(0, 70) + '  →  $' + first.price + '\n' + first.url + '\n' : '') +
-          (items.length
-            ? '✅ Server action works. If a cell is still NO MATCH it is a keyword/model filter (Config tab), not connectivity.'
-            : '⚠ 0 products. Usually the Next-Action id changed after a CrazyParts redeploy — re-capture it (see EDIT ME block), or you are not logged in.')
-        );
-      }).catch(e => out('❌ ' + e.message + '\n(If this is a parse error the RSC format may have changed — send me a capture.)'));
-      return;
-    }
-    const url = SITE.searchUrl(query);
-    out('⏳ Fetching (logged-in):\n' + url + '\n…');
-    fetch(url, { credentials: 'include' })
-      .then(r => r.text().then(html => ({ status: r.status, html })))
-      .then(({ status, html }) => {
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        const tiles = doc.querySelectorAll(SITE.item);
-        const first = tiles[0];
-        const sampleTitle = first && first.querySelector(SITE.title) ? first.querySelector(SITE.title).textContent.trim().slice(0, 80) : '(none)';
-        const samplePrice = first && first.querySelector(SITE.price) ? first.querySelector(SITE.price).textContent.replace(/\s+/g, ' ').trim().slice(0, 40) : '(none)';
-        const fname = 'ppp-capture-' + SITE.key + '-' + query.replace(/[^a-z0-9]+/gi, '_') + '.html';
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-        a.download = fname; document.body.appendChild(a); a.click();
-        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-        out(
-          'HTTP ' + status + '  •  ' + html.length + ' bytes\n' +
-          'Downloaded: ' + fname + '\n' +
-          'product tiles matched (SITE.item): ' + tiles.length + '\n' +
-          'first title: ' + sampleTitle + '\n' +
-          'first price: ' + samplePrice + '\n' +
-          (tiles.length && samplePrice !== '(none)'
-            ? '✅ Tiles + prices parse — pulls should match. If a cell is still NO MATCH it is a keyword/model filter, not the selectors.'
-            : tiles.length
-              ? '⚠ Tiles found but no price parsed — adjust the price selector for this site.'
-              : '⚠ No product tiles — wrong search URL for this platform, or you are not logged in. Send me this file.')
-        );
-      })
-      .catch(e => out('❌ ' + e.message));
+    out('⏳ CrazyParts server-action search (logged-in):\n["' + query + '",1,20]\n…');
+    SITE.fetchProducts(query, 20).then(items => {
+      const lines = items.slice(0, 12).map(it => '  $' + it.price + '  ' + it.title.slice(0, 60));
+      out(
+        'products parsed: ' + items.length + '\n' +
+        (lines.length ? lines.join('\n') + '\n' : '') +
+        (items.length
+          ? '✅ Server action works. If a cell is still NO MATCH it is a keyword/model filter (Config tab), not connectivity.'
+          : '⚠ 0 products. Usually the Next-Action id changed after a CrazyParts redeploy — re-capture it (see EDIT ME block), or you are not logged in.')
+      );
+    }).catch(e => out('❌ ' + e.message + '\n(If this is a parse error the RSC format may have changed — send me a capture.)'));
   }
 
   // ---------------- Matching engine ----------------
@@ -205,9 +157,12 @@
 
   // Reject titles that are a *bigger* model (e.g. searching "iPhone 12" matching "iPhone 12 Pro Max")
   const MODEL_SUFFIXES = ['pro', 'max', 'plus', 'ultra', 'mini', 'fe', 'e'];
+  // Whole-word test — so "plus" does NOT match inside the brand "AMPLUS", and
+  // "pro" does NOT match inside "protection". Non-alphanumerics are word breaks.
+  const hasWord = (hay, t) => new RegExp('(^|[^a-z0-9])' + escapeRe(t) + '($|[^a-z0-9])').test(hay);
   function titleMatchesDevice(titleN, device) {
     const toks = deviceTokens(device);
-    for (const t of toks) if (!titleN.includes(t)) return false;
+    for (const t of toks) if (!hasWord(titleN, t)) return false;
     const devN = norm(device.search);
     for (const suf of MODEL_SUFFIXES) {
       if (!devN.includes(' ' + suf) && new RegExp('\\b' + escapeRe(lastNumToken(devN)) + '\\s+' + suf + '\\b').test(titleN)) return false;
@@ -227,15 +182,6 @@
     if (must.length && !must.some(k => titleN.includes(k))) return false;
     if (excl.some(k => titleN.includes(k))) return false;
     return true;
-  }
-
-  function parsePrice(el) {
-    if (!el) return null;
-    const ins = el.querySelector('ins');
-    const txt = (ins || el).textContent || '';
-    const nums = (txt.match(/[\d,]+\.\d{2}|[\d,]+/g) || [])
-      .map(n => parseFloat(n.replace(/,/g, ''))).filter(n => !isNaN(n) && n > 0);
-    return nums.length ? Math.min(...nums) : null;
   }
 
   // ---------------- CrazyParts: Next.js server-action search ----------------
@@ -309,28 +255,9 @@
     return null;
   }
 
-  // ---------------- The Parts Home: HTML scraping ----------------
-  async function domFetchProducts(query, maxResults) {
-    const url = SITE.searchUrl(query);
-    const res = await fetch(url, { credentials: 'include' });
-    const html = await res.text();
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    return [...doc.querySelectorAll(SITE.item)].slice(0, maxResults).map(it => {
-      const titleEl = it.querySelector(SITE.title);
-      const linkEl = it.querySelector(SITE.link);
-      return {
-        title: titleEl ? titleEl.textContent.trim() : '',
-        price: parsePrice(it.querySelector(SITE.price)),
-        url: linkEl ? linkEl.href : url,
-      };
-    });
-  }
-
   async function searchOne(device, q, grade, maxResults) {
     const query = (q.template.replace('{device}', device.search).replace('{grade}', grade || '')).trim();
-    const candidates = SITE.mode === 'rsc'
-      ? await SITE.fetchProducts(query, maxResults)
-      : await domFetchProducts(query, maxResults);
+    const candidates = await SITE.fetchProducts(query, maxResults);
 
     let best = null;
     for (const it of candidates) {
@@ -339,7 +266,7 @@
       if (!titleMatchesDevice(titleN, device) || !keywordCheck(titleN, q)) continue;
       if (!best || it.price < best.price) best = { price: it.price, title: it.title, url: it.url };
     }
-    const fallbackUrl = SITE.searchPageUrl ? SITE.searchPageUrl(query) : (SITE.searchUrl ? SITE.searchUrl(query) : location.origin);
+    const fallbackUrl = SITE.searchPageUrl ? SITE.searchPageUrl(query) : location.origin;
     return { device: device.name, part: q.part, price: best ? best.price : null, title: best ? best.title : 'NO MATCH — query: ' + query, url: best ? best.url : fallbackUrl };
   }
 
