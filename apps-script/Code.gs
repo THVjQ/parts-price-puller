@@ -105,7 +105,11 @@ function setupSheets() {
   }
 
   rebuildPricesGrid();
-  SpreadsheetApp.getUi().alert('Setup done. Now deploy as Web App (Deploy > New deployment) and set the KEY script property.');
+  // Non-blocking toast instead of getUi().alert(): running setupSheets() from the
+  // editor with the Sheet tab unfocused makes alert() hang until the 6-min timeout.
+  try {
+    ss.toast('Setup done. Deploy as Web App (Deploy > New deployment) and set the KEY script property.', 'Parts Price Puller', 10);
+  } catch (e) { /* no UI context (e.g. run headless) — ignore */ }
 }
 
 function defaultDevices() {
