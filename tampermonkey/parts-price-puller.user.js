@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.3.0
+// @version      1.5.0
 // @description  Pulls logged-in part prices from CrazyParts + The Parts Home into Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,32 +22,55 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.3.0';
+  const SCRIPT_VERSION = '1.5.0';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
   const getKey = () => GM_getValue('gasKey', '');
 
-  // ═══════════════════════ EDIT ME (only if a site changes layout) ═══════════════════════
-  // Both sites are WooCommerce-style; if a selector misses,
-  // right-click a product tile > Inspect and adjust here.
+  // ═══════════════════════ EDIT ME ═══════════════════════
+  //
+  // CrazyParts is a Next.js (App Router) storefront — products are fetched by a
+  // React Server Action, NOT rendered into the HTML. A search is:
+  //     POST https://www.crazyparts.com.au/
+  //     headers: Accept: text/x-component
+  //              Content-Type: text/plain;charset=UTF-8
+  //              Next-Action: <CP_SEARCH_ACTION>
+  //              Next-Router-State-Tree: <CP_STATE_TREE>
+  //     body:    ["<query>", <page>, <pageSize>]     e.g. ["iphone 6s lcd",1,20]
+  // The response is an RSC stream containing {"products":[{..,"variants":[{..}]}]}.
+  // Each variant carries the logged-in wholesale price in member_price.price
+  // (the "+GST" price you see on the tile).
+  //
+  // ⚠ CP_SEARCH_ACTION is tied to the site's current build and WILL change when
+  // CrazyParts redeploys their frontend. When CP suddenly returns NO MATCH again:
+  //   1. Open crazyparts.com.au (logged in) → DevTools → Network → Fetch/XHR
+  //   2. Search anything in the site's own search box
+  //   3. Click the POST to "/" whose response is text/x-component with products
+  //   4. Copy the "Next-Action" request header value → paste below.
+  // (The state tree rarely changes; refresh it the same way if needed.)
+  const CP_SEARCH_ACTION = '704b975d6057afa591a7ded065387da6e10b829c47';
+  const CP_STATE_TREE = '%5B%22%22%2C%7B%22children%22%3A%5B%22(site)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C16%5D';
+
+  // The Parts Home is still a WooCommerce-style site rendered as HTML, so it uses
+  // classic selector scraping. If a selector misses, Inspect a product tile + adjust.
+  const TPH_ITEM  = 'li.product, .product-grid-item, .products .product, li.product-item';
+  const TPH_TITLE = '.woocommerce-loop-product__title, .product-title, .product-item-link, h2, h3';
+  const TPH_PRICE = '.price, .price-box';
+  const TPH_LINK  = 'a.woocommerce-LoopProduct-link, .product-item-link, a';
+
   const SITE_DEFS = {
     'crazyparts.com.au': {
       key: 'CP',
-      // Next.js/CrazyPOS storefront — real search path (products embedded as JSON, not DOM)
-      searchUrl: q => `${location.origin}/products/search/${encodeURIComponent(q)}`,
-      item:  'li.product, .product-grid-item, .products .product',
-      title: '.woocommerce-loop-product__title, .product-title, h2, h3',
-      price: '.price',
-      link:  'a.woocommerce-LoopProduct-link, a',
+      mode: 'rsc',                                   // Next.js server-action JSON, not HTML
+      fetchProducts: cpFetchProducts,
+      searchPageUrl: q => `${location.origin}/products/search/${encodeURIComponent(q)}`, // human link for notes
     },
     'thepartshome.com.au': {
       key: 'TPH',
+      mode: 'dom',                                   // WooCommerce HTML scraping
       searchUrl: q => `${location.origin}/?s=${encodeURIComponent(q)}&post_type=product`,
-      item:  'li.product, .product-grid-item, .products .product',
-      title: '.woocommerce-loop-product__title, .product-title, h2, h3',
-      price: '.price',
-      link:  'a.woocommerce-LoopProduct-link, a',
+      item: TPH_ITEM, title: TPH_TITLE, price: TPH_PRICE, link: TPH_LINK,
     },
   };
   // ═════════════════════ END EDIT ME ═════════════════════
@@ -128,15 +151,30 @@
   // response so the site's real markup / embedded JSON (with wholesale prices)
   // can be analysed. Also reports quick stats inline.
   function captureSearch(query, out) {
+    if (SITE.mode === 'rsc') {
+      out('⏳ CrazyParts server-action search (logged-in):\n["' + query + '",1,20]\n…');
+      SITE.fetchProducts(query, 20).then(items => {
+        const first = items[0];
+        out(
+          'products parsed: ' + items.length + '\n' +
+          (first ? 'first: ' + first.title.slice(0, 70) + '  →  $' + first.price + '\n' + first.url + '\n' : '') +
+          (items.length
+            ? '✅ Server action works. If a cell is still NO MATCH it is a keyword/model filter (Config tab), not connectivity.'
+            : '⚠ 0 products. Usually the Next-Action id changed after a CrazyParts redeploy — re-capture it (see EDIT ME block), or you are not logged in.')
+        );
+      }).catch(e => out('❌ ' + e.message + '\n(If this is a parse error the RSC format may have changed — send me a capture.)'));
+      return;
+    }
     const url = SITE.searchUrl(query);
     out('⏳ Fetching (logged-in):\n' + url + '\n…');
     fetch(url, { credentials: 'include' })
       .then(r => r.text().then(html => ({ status: r.status, html })))
       .then(({ status, html }) => {
-        const names   = (html.match(/"name":"/g) || []).length;
-        const priceHits = {};
-        ['member_price','business_account_price_ex_tax','individual_account_price_ex_tax','unit_price_ex_tax','unit_price','origin_price','retail_price','price']
-          .forEach(k => { const n = (html.match(new RegExp('"' + k + '"', 'g')) || []).length; if (n) priceHits[k] = n; });
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const tiles = doc.querySelectorAll(SITE.item);
+        const first = tiles[0];
+        const sampleTitle = first && first.querySelector(SITE.title) ? first.querySelector(SITE.title).textContent.trim().slice(0, 80) : '(none)';
+        const samplePrice = first && first.querySelector(SITE.price) ? first.querySelector(SITE.price).textContent.replace(/\s+/g, ' ').trim().slice(0, 40) : '(none)';
         const fname = 'ppp-capture-' + SITE.key + '-' + query.replace(/[^a-z0-9]+/gi, '_') + '.html';
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -145,9 +183,14 @@
         out(
           'HTTP ' + status + '  •  ' + html.length + ' bytes\n' +
           'Downloaded: ' + fname + '\n' +
-          '"name" occurrences: ' + names + '\n' +
-          'price fields seen: ' + (Object.keys(priceHits).length ? JSON.stringify(priceHits) : 'NONE') + '\n' +
-          (names ? '✅ Product JSON is present — send me this file.' : '⚠ No product data — may need login or a different URL.')
+          'product tiles matched (SITE.item): ' + tiles.length + '\n' +
+          'first title: ' + sampleTitle + '\n' +
+          'first price: ' + samplePrice + '\n' +
+          (tiles.length && samplePrice !== '(none)'
+            ? '✅ Tiles + prices parse — pulls should match. If a cell is still NO MATCH it is a keyword/model filter, not the selectors.'
+            : tiles.length
+              ? '⚠ Tiles found but no price parsed — adjust the price selector for this site.'
+              : '⚠ No product tiles — wrong search URL for this platform, or you are not logged in. Send me this file.')
         );
       })
       .catch(e => out('❌ ' + e.message));
@@ -195,27 +238,109 @@
     return nums.length ? Math.min(...nums) : null;
   }
 
-  async function searchOne(device, q, grade, maxResults) {
-    const query = q.template.replace('{device}', device.search).replace('{grade}', grade || '');
-    const url = SITE.searchUrl(query.trim());
+  // ---------------- CrazyParts: Next.js server-action search ----------------
+  // Returns a normalised candidate list [{title, price, url}] from the RSC JSON.
+  async function cpFetchProducts(query, maxResults) {
+    const res = await fetch(location.origin + '/', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Accept': 'text/x-component',
+        'Content-Type': 'text/plain;charset=UTF-8',
+        'Next-Action': CP_SEARCH_ACTION,
+        'Next-Router-State-Tree': CP_STATE_TREE,
+      },
+      body: JSON.stringify([query, 1, Math.max(maxResults || 20, 20)]),
+    });
+    const txt = await res.text();
+    const products = parseRscProducts(txt);
+    const out = [];
+    for (const p of products) {
+      const variants = Array.isArray(p.variants) && p.variants.length ? p.variants : [p];
+      for (const v of variants) {
+        const price = cpVariantPrice(v);
+        if (price === null) continue;
+        out.push({
+          title: v.name || p.name || '',
+          price,
+          url: location.origin + '/products/detail/' + (p.id != null ? p.id : '') + (v.id != null ? '?variant_id=' + v.id : ''),
+        });
+      }
+    }
+    return out;
+  }
+
+  // Logged-in wholesale price = member_price.price; fall back through ex-tax fields.
+  function cpVariantPrice(v) {
+    const cands = [
+      v && v.member_price && v.member_price.price,
+      v && v.unit_price_ex_tax,
+      v && v.origin_price,
+      v && v.sold_price,
+    ];
+    for (const x of cands) if (typeof x === 'number' && x > 0) return x;
+    return null;
+  }
+
+  // Pull the {"products":[...]} array out of a Next.js RSC (text/x-component) stream.
+  function parseRscProducts(txt) {
+    const KEY = '"products":';
+    let i = txt.indexOf(KEY);
+    while (i !== -1) {
+      const arrStart = txt.indexOf('[', i);
+      if (arrStart !== -1) {
+        const arr = extractBalanced(txt, arrStart, '[', ']');
+        if (arr) { try { const p = JSON.parse(arr); if (Array.isArray(p) && p.length) return p; } catch (e) { /* keep scanning */ } }
+      }
+      i = txt.indexOf(KEY, i + 1);
+    }
+    return [];
+  }
+  // Extract a balanced [...] / {...} substring, respecting strings + escapes.
+  function extractBalanced(s, start, open, close) {
+    let depth = 0, inStr = false, esc = false;
+    for (let j = start; j < s.length; j++) {
+      const ch = s[j];
+      if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === open) depth++;
+      else if (ch === close) { depth--; if (depth === 0) return s.slice(start, j + 1); }
+    }
+    return null;
+  }
+
+  // ---------------- The Parts Home: HTML scraping ----------------
+  async function domFetchProducts(query, maxResults) {
+    const url = SITE.searchUrl(query);
     const res = await fetch(url, { credentials: 'include' });
     const html = await res.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    const items = [...doc.querySelectorAll(SITE.item)].slice(0, maxResults);
+    return [...doc.querySelectorAll(SITE.item)].slice(0, maxResults).map(it => {
+      const titleEl = it.querySelector(SITE.title);
+      const linkEl = it.querySelector(SITE.link);
+      return {
+        title: titleEl ? titleEl.textContent.trim() : '',
+        price: parsePrice(it.querySelector(SITE.price)),
+        url: linkEl ? linkEl.href : url,
+      };
+    });
+  }
+
+  async function searchOne(device, q, grade, maxResults) {
+    const query = (q.template.replace('{device}', device.search).replace('{grade}', grade || '')).trim();
+    const candidates = SITE.mode === 'rsc'
+      ? await SITE.fetchProducts(query, maxResults)
+      : await domFetchProducts(query, maxResults);
 
     let best = null;
-    for (const it of items) {
-      const titleEl = it.querySelector(SITE.title);
-      const title = titleEl ? titleEl.textContent.trim() : '';
-      const titleN = norm(title);
-      if (!title || !titleMatchesDevice(titleN, device) || !keywordCheck(titleN, q)) continue;
-      const price = parsePrice(it.querySelector(SITE.price));
-      if (price === null) continue;
-      const linkEl = it.querySelector(SITE.link);
-      const link = linkEl ? linkEl.href : url;
-      if (!best || price < best.price) best = { price, title, url: link };
+    for (const it of candidates) {
+      const titleN = norm(it.title);
+      if (!it.title || it.price === null || it.price === undefined) continue;
+      if (!titleMatchesDevice(titleN, device) || !keywordCheck(titleN, q)) continue;
+      if (!best || it.price < best.price) best = { price: it.price, title: it.title, url: it.url };
     }
-    return { device: device.name, part: q.part, price: best ? best.price : null, title: best ? best.title : 'NO MATCH — query: ' + query, url: best ? best.url : url };
+    const fallbackUrl = SITE.searchPageUrl ? SITE.searchPageUrl(query) : (SITE.searchUrl ? SITE.searchUrl(query) : location.origin);
+    return { device: device.name, part: q.part, price: best ? best.price : null, title: best ? best.title : 'NO MATCH — query: ' + query, url: best ? best.url : fallbackUrl };
   }
 
   // ---------------- Pull run ----------------
