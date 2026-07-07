@@ -1,5 +1,5 @@
 /**
- * Parts Price Puller — Willard scheduled scraper v1.3.0
+ * Parts Price Puller — Willard scheduled scraper v1.4.0
  * Logs into CrazyParts with Playwright, runs the same search/match logic,
  * POSTs results to the Apps Script web app. Schedule (day/hour) is read
  * LIVE from the sheet Config tab, so changing it in the sheet just works.
@@ -134,12 +134,29 @@ const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Whole-word test — so "plus" does NOT match inside "AMPLUS", "pro" not inside "protection".
 const hasWord = (hay, t) => new RegExp('(^|[^a-z0-9])' + escapeRe(t) + '($|[^a-z0-9])').test(hay);
+// Last device token that contains a digit — "s22" (not "22") — so the boundary lands right.
+const lastModelToken = s => { const t = s.split(' ').filter(x => /\d/.test(x)); return t.length ? t[t.length - 1] : ' '; };
 function titleMatchesDevice(titleN, device) {
   const toks = norm(device.search).split(' ').filter(Boolean);
   for (const t of toks) if (!hasWord(titleN, t)) return false;
   const devN = norm(device.search);
-  for (const suf of MODEL_SUFFIXES) {
-    if (!devN.includes(' ' + suf) && new RegExp('\\b' + escapeRe(lastNumToken(devN)) + '\\s+' + suf + '\\b').test(titleN)) return false;
+  const model = lastModelToken(devN);
+  if (model !== ' ') {
+    const dw = devN.split(' '), mi = dw.indexOf(model), devSuf = [];
+    if (mi >= 0) for (let k = mi + 1; k < dw.length; k++) { if (MODEL_SUFFIXES.includes(dw[k])) devSuf.push(dw[k]); else break; }
+    // Title must mention the model with the SAME suffix-run somewhere: lets "13 / 13 mini"
+    // multi-fit parts match "iPhone 13", but blocks "13 Pro Max" and "13 mini".
+    const words = titleN.split(' ');
+    let sawModel = false, okModel = false;
+    for (let i = 0; i < words.length && !okModel; i++) {
+      if (words[i] !== model) continue;
+      sawModel = true;
+      const run = [];
+      for (let k = i + 1; k < words.length; k++) { if (MODEL_SUFFIXES.includes(words[k])) run.push(words[k]); else break; }
+      if (run.length === devSuf.length && run.every((s, idx) => s === devSuf[idx])) okModel = true;
+    }
+    if (sawModel && !okModel) return false;
+    if (!devN.includes('+') && !devSuf.includes('plus') && new RegExp('\\b' + escapeRe(model) + '\\+').test(titleN)) return false; // "s22+"
   }
   if (device.aliases) {
     const al = device.aliases.split(';').map(norm).filter(Boolean);
@@ -147,7 +164,18 @@ function titleMatchesDevice(titleN, device) {
   }
   return true;
 }
+// Hardcoded safeguard — never a phone screen/part module; killed on every search
+// regardless of the sheet Config, so an out-of-date Config still gets clean results.
+const GLOBAL_EXCLUDE = [
+  'stencil', 'mould', 'mold', 'alignment', 'polarizer', 'film', 'filter', 'pack of',
+  'laminating', 'oca', 'mesh', 'backlight', 'flex protection', 'blue light', 'bead',
+  'camera lens', 'lens replacement', 'lens for', 'jig', 'tester', 'remover', 'sticker',
+  'template', 'fixture', 'positioning', 'screen protector', 'tempered glass',
+  'protection film', 'uv glue', 'tweezer', 'brush', 'cleaning', 'tool kit', 'repair tool',
+  'sponge', 'engraving', 'dummy', 'sample', 'keychain',
+];
 function keywordCheck(titleN, q) {
+  if (GLOBAL_EXCLUDE.some(k => titleN.includes(k))) return false;
   const must = q.match ? q.match.split(';').map(norm).filter(Boolean) : [];
   const excl = q.exclude ? q.exclude.split(';').map(norm).filter(Boolean) : [];
   if (must.length && !must.some(k => titleN.includes(k))) return false;

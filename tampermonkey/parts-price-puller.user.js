@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.6.0
+// @version      1.7.0
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.6.0';
+  const SCRIPT_VERSION = '1.7.0';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -164,8 +164,25 @@
     const toks = deviceTokens(device);
     for (const t of toks) if (!hasWord(titleN, t)) return false;
     const devN = norm(device.search);
-    for (const suf of MODEL_SUFFIXES) {
-      if (!devN.includes(' ' + suf) && new RegExp('\\b' + escapeRe(lastNumToken(devN)) + '\\s+' + suf + '\\b').test(titleN)) return false;
+    const model = lastModelToken(devN);
+    if (model !== ' ') {
+      // Suffix-run the device carries after its model number, e.g. "pro max", "ultra", "fe", or none.
+      const dw = devN.split(' '), mi = dw.indexOf(model), devSuf = [];
+      if (mi >= 0) for (let k = mi + 1; k < dw.length; k++) { if (MODEL_SUFFIXES.includes(dw[k])) devSuf.push(dw[k]); else break; }
+      // The title must mention this model with the SAME suffix-run somewhere. That lets a
+      // "13 / 13 mini" multi-fit part match "iPhone 13", but blocks "13 Pro Max" or "13 mini".
+      const words = titleN.split(' ');
+      let sawModel = false, okModel = false;
+      for (let i = 0; i < words.length && !okModel; i++) {
+        if (words[i] !== model) continue;
+        sawModel = true;
+        const run = [];
+        for (let k = i + 1; k < words.length; k++) { if (MODEL_SUFFIXES.includes(words[k])) run.push(words[k]); else break; }
+        if (run.length === devSuf.length && run.every((s, idx) => s === devSuf[idx])) okModel = true;
+      }
+      if (sawModel && !okModel) return false;
+      // "S22+" glued-plus: a base device must not match the plus product.
+      if (!devN.includes('+') && !devSuf.includes('plus') && new RegExp('\\b' + escapeRe(model) + '\\+').test(titleN)) return false;
     }
     if (device.aliases) {
       const al = device.aliases.split(';').map(norm).filter(Boolean);
@@ -175,8 +192,23 @@
   }
   const lastNumToken = s => (s.match(/\d+[a-z]*/g) || ['\u0000']).pop();
   const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Last device token that contains a digit — "s22" (not "22"), "12" for "iphone 12" —
+  // so the word boundary before it lands right for both Samsung and iPhone naming.
+  const lastModelToken = s => { const t = s.split(' ').filter(x => /\d/.test(x)); return t.length ? t[t.length - 1] : ' '; };
 
+  // Hardcoded safeguard: things that are never a phone screen/part module, killed on
+  // EVERY search regardless of the sheet Config — films, polarizers, stencils, packs,
+  // lens-only glass, tools, etc. So even an out-of-date Config still gets clean results.
+  const GLOBAL_EXCLUDE = [
+    'stencil', 'mould', 'mold', 'alignment', 'polarizer', 'film', 'filter', 'pack of',
+    'laminating', 'oca', 'mesh', 'backlight', 'flex protection', 'blue light', 'bead',
+    'camera lens', 'lens replacement', 'lens for', 'jig', 'tester', 'remover', 'sticker',
+    'template', 'fixture', 'positioning', 'screen protector', 'tempered glass',
+    'protection film', 'uv glue', 'tweezer', 'brush', 'cleaning', 'tool kit', 'repair tool',
+    'sponge', 'engraving', 'dummy', 'sample', 'keychain',
+  ];
   function keywordCheck(titleN, q) {
+    if (GLOBAL_EXCLUDE.some(k => titleN.includes(k))) return false;
     const must = q.match ? q.match.split(';').map(norm).filter(Boolean) : [];
     const excl = q.exclude ? q.exclude.split(';').map(norm).filter(Boolean) : [];
     if (must.length && !must.some(k => titleN.includes(k))) return false;

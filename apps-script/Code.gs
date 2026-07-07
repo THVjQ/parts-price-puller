@@ -1,6 +1,6 @@
 /**
  * PARTS PRICE PULLER — Google Apps Script (bind to your Sheet)
- * v1.0.0
+ * v1.2.0 — CrazyParts-only, single-column grid, change colouring + manual lock
  *
  * SETUP:
  * 1. Create a new Google Sheet
@@ -152,52 +152,56 @@ function defaultDevices() {
   ]);
 }
 
-// Grid: col A device, then per part type a CP + TPH column pair. Row1 part headers (merged over 2), row2 site labels.
+// Grid: col A = device, then ONE CrazyParts price column per part.
+// Row 1 = friendly part label, Row 2 = the machine part-key (small, used by writePrices_).
 function rebuildPricesGrid() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(SH_PRICES) || ss.insertSheet(SH_PRICES, 0);
   const devices = getDevices().filter(d => d.enabled);
   const grade = getConfigValue('Grade') || 'BQ7';
+  const nCols = 1 + PARTS.length;
 
-  // Preserve existing prices keyed by device|part|site
-  const existing = {};
-  if (sh.getLastRow() > 2) {
-    const data = sh.getDataRange().getValues();
-    const partRow = data[0], siteRow = data[1];
-    for (let r = 2; r < data.length; r++) {
-      let curPart = '';
-      for (let c = 1; c < data[r].length; c++) {
-        if (partRow[c]) curPart = String(partRow[c]).split('|')[0].trim();
-        const k = data[r][0] + '|' + curPart + '|' + siteRow[c];
-        if (data[r][c] !== '') existing[k] = data[r][c];
+  // Preserve prices AND cell colours (incl. manual-blue) by device name — but only when
+  // the sheet is already in this exact single-column layout (row 2 = part keys). If it is
+  // the old two-site layout or anything else, start clean.
+  const oldByDevice = {};
+  if (sh.getLastRow() > 2 && sh.getLastColumn() === nCols) {
+    const ov = sh.getDataRange().getValues(), ob = sh.getDataRange().getBackgrounds();
+    const keyRow = ov[1].slice(1).map(x => String(x).trim());
+    if (PARTS.every((p, i) => keyRow[i] === p.key)) {
+      for (let r = 2; r < ov.length; r++) {
+        const name = String(ov[r][0]).trim().toLowerCase();
+        if (name) oldByDevice[name] = { vals: ov[r].slice(1), bgs: ob[r].slice(1) };
       }
     }
   }
 
   sh.clear();
-  const nSites = SITES.length;
-  const nCols = 1 + PARTS.length * nSites;
-  const partHdr = ['Device'], siteHdr = [''];
-  PARTS.forEach(p => {
-    partHdr.push(p.key + ' | ' + p.label.replace('{grade}', grade));
-    for (let k = 1; k < nSites; k++) partHdr.push('');   // pad so each part spans nSites cols
-    SITES.forEach(s => siteHdr.push(s.label));
-  });
-  sh.getRange(1, 1, 1, nCols).setValues([partHdr]).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#ffffff');
-  sh.getRange(2, 1, 1, nCols).setValues([siteHdr]).setFontWeight('bold').setBackground('#16213e').setFontColor('#a0c4ff');
-  if (nSites > 1) for (let i = 0; i < PARTS.length; i++) sh.getRange(1, 2 + i * nSites, 1, nSites).merge();
+  const labelRow = ['Device'].concat(PARTS.map(p => p.label.replace('{grade}', grade)));
+  const keyRow   = ['CrazyParts (ex GST)'].concat(PARTS.map(p => p.key));
+  sh.getRange(1, 1, 1, nCols).setValues([labelRow])
+    .setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#ffffff')
+    .setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
+  sh.getRange(2, 1, 1, nCols).setValues([keyRow])
+    .setBackground('#16213e').setFontColor('#7f93b8').setFontSize(8).setHorizontalAlignment('center');
+  sh.getRange(2, 1).setFontColor('#a0c4ff').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('left');
 
-  const rows = devices.map(d => {
-    const row = [d.name];
-    PARTS.forEach(p => SITES.forEach(s => row.push(existing[d.name + '|' + p.key + '|' + s.label] || '')));
-    return row;
+  const rows = [], bgs = [];
+  devices.forEach(d => {
+    const old = oldByDevice[d.name.trim().toLowerCase()];
+    const row = [d.name], bg = ['#f0f3fa'];
+    PARTS.forEach((p, i) => { row.push(old ? old.vals[i] : ''); bg.push(old ? old.bgs[i] : '#ffffff'); });
+    rows.push(row); bgs.push(bg);
   });
-  if (rows.length) sh.getRange(3, 1, rows.length, nCols).setValues(rows);
+  if (rows.length) sh.getRange(3, 1, rows.length, nCols).setValues(rows).setBackgrounds(bgs);
+
   sh.setFrozenRows(2); sh.setFrozenColumns(1);
-  sh.setColumnWidth(1, 190);
-  for (let c = 2; c <= nCols; c++) sh.setColumnWidth(c, 92);
-  // banding for readability
-  sh.getRange(3, 1, Math.max(rows.length, 1), nCols).setNumberFormat('@');
+  sh.setColumnWidth(1, 200);
+  for (let c = 2; c <= nCols; c++) sh.setColumnWidth(c, 96);
+  sh.setRowHeight(1, 34);
+  if (rows.length) sh.getRange(3, 1, rows.length, 1).setFontWeight('bold');
+  sh.getRange(1, 1, Math.max(rows.length, 1) + 2, nCols)
+    .setBorder(true, true, true, true, true, true, '#d0d7e6', SpreadsheetApp.BorderStyle.SOLID);
 }
 
 function menuAddDevice() {
@@ -315,14 +319,13 @@ function writePrices_(siteKey, results) {
     const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_PRICES);
     const data = sh.getDataRange().getValues();
     const bgs  = sh.getDataRange().getBackgrounds();   // preserve/compare colours in one read
-    const partRow = data[0], siteRow = data[1];
 
-    // column lookup: part+site → col index
+    // Column lookup by part key, from row 2 (which holds the keys). One column per part.
     const colFor = {};
-    let curPart = '';
-    for (let c = 1; c < partRow.length; c++) {
-      if (partRow[c]) curPart = String(partRow[c]).split('|')[0].trim();
-      colFor[curPart + '|' + siteRow[c]] = c;
+    const keyRow = data[1] || [];
+    for (let c = 1; c < keyRow.length; c++) {
+      const k = String(keyRow[c]).trim();
+      if (k) colFor[k] = c;
     }
     const rowFor = {};
     for (let r = 2; r < data.length; r++) rowFor[String(data[r][0]).trim().toLowerCase()] = r;
@@ -331,7 +334,7 @@ function writePrices_(siteKey, results) {
     const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
     results.forEach(res => {
       const r = rowFor[String(res.device).trim().toLowerCase()];
-      const c = colFor[res.part + '|' + site.label];
+      const c = colFor[res.part];
       if (r === undefined || c === undefined) return;
       // Never touch a human-entered (blue) cell.
       if (String(bgs[r][c]).toLowerCase() === MANUAL_BLUE) return;
