@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.7.0
+// @version      1.8.0
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.7.0';
+  const SCRIPT_VERSION = '1.8.0';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -211,7 +211,10 @@
     if (GLOBAL_EXCLUDE.some(k => titleN.includes(k))) return false;
     const must = q.match ? q.match.split(';').map(norm).filter(Boolean) : [];
     const excl = q.exclude ? q.exclude.split(';').map(norm).filter(Boolean) : [];
-    if (must.length && !must.some(k => titleN.includes(k))) return false;
+    // A must-keyword matches when EVERY word in it is present (not necessarily adjacent),
+    // so "lcd assembly" still matches real titles like "LCD Screen Assembly".
+    const phraseIn = (t, phrase) => phrase.split(' ').every(w => t.includes(w));
+    if (must.length && !must.some(k => phraseIn(titleN, k))) return false;
     if (excl.some(k => titleN.includes(k))) return false;
     return true;
   }

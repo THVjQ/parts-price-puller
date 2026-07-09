@@ -178,7 +178,10 @@ function keywordCheck(titleN, q) {
   if (GLOBAL_EXCLUDE.some(k => titleN.includes(k))) return false;
   const must = q.match ? q.match.split(';').map(norm).filter(Boolean) : [];
   const excl = q.exclude ? q.exclude.split(';').map(norm).filter(Boolean) : [];
-  if (must.length && !must.some(k => titleN.includes(k))) return false;
+  // A must-keyword matches when EVERY word in it is present (not necessarily adjacent),
+  // so "lcd assembly" still matches real titles like "LCD Screen Assembly".
+  const phraseIn = (t, phrase) => phrase.split(' ').every(w => t.includes(w));
+  if (must.length && !must.some(k => phraseIn(titleN, k))) return false;
   if (excl.some(k => titleN.includes(k))) return false;
   return true;
 }

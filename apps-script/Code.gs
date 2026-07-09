@@ -1,6 +1,6 @@
 /**
  * PARTS PRICE PULLER — Google Apps Script (bind to your Sheet)
- * v1.2.0 — CrazyParts-only, single-column grid, change colouring + manual lock
+ * v1.3.0 — CrazyParts-only, single-column grid, change colouring + manual lock
  *
  * SETUP:
  * 1. Create a new Google Sheet
@@ -67,9 +67,14 @@ function setupSheets() {
   }
 
   // ---- Config
+  // Two INDEPENDENT sections (settings block + query-template table) so a partly-filled
+  // Config self-heals. Previously both were gated on one "sheet is empty" check, so once
+  // Config had any settings rows the query table (A10:E18) was never written — getQueries()
+  // came back empty and every pull finished "0 prices written".
   let cf = ss.getSheetByName(SH_CONFIG) || ss.insertSheet(SH_CONFIG);
-  if (cf.getLastRow() < 2) {
-    cf.clear();
+
+  // Settings block (rows 1-6) — written only if the Grade setting isn't there yet.
+  if (getConfigValue('Grade') === null) {
     cf.getRange('A1:B1').setValues([['Setting', 'Value']]).setFontWeight('bold');
     cf.getRange('A2:B6').setValues([
       ['Grade', 'BQ7'],                       // AMP / BQ7 / SP / INCELL / whatever the site names them
@@ -83,12 +88,14 @@ function setupSheets() {
       .requireValueInList(['AMP', 'BQ7', 'SP', 'INCELL', 'HARD OLED', 'SOFT OLED'], true).setAllowInvalid(true).build());
     cf.getRange('B3').setDataValidation(SpreadsheetApp.newDataValidation()
       .requireValueInList(['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'], true).build());
+  }
 
-    // Query templates — fully editable. {device} {grade} substituted by scrapers.
+  // Query-template table (row 9 header + rows 10-18) — written only if missing. Fully
+  // editable afterwards; {device} {grade} are substituted by the scrapers.
+  if (String(cf.getRange('A9').getValue()).trim() !== 'Part Key') {
     cf.getRange('A9:E9').setValues([['Part Key', 'Query Template', 'Must-match keywords (; any-of)', 'Exclude keywords (; separated)', 'Notes']]).setFontWeight('bold');
-    // Must-match is ANY-OF; exclude is a kill-list. On CrazyParts real screens are
-    // named "… LCD Assembly …" / "… OLED Assembly …", so requiring "assembly" throws
-    // out films, polarizers, stencils, moulds, packs, tools etc. that used to win on price.
+    // Must-match is ANY-OF and word-wise: "lcd assembly" matches a title that contains
+    // both words in any order (e.g. "LCD Screen Assembly"). Exclude is a kill-list.
     const ACC = 'stencil;mould;mold;alignment;polarizer;film;filter;pack;sticker;foam;adhesive;tape;protector;laminating;mesh;oca;backlight;bezel;frame only;tool;jig;remover';
     cf.getRange('A10:E18').setValues([
       ['LCD',        '{device} LCD {grade}',          'lcd assembly',                 'oled;refurb;service pack;' + ACC,     'needs "assembly"'],
@@ -101,9 +108,9 @@ function setupSheets() {
       ['CAM_FRONT',  '{device} front camera',         'front camera',                 'lens;rear;back camera;' + ACC,        ''],
       ['BACK_GLASS', '{device} back glass',           'back glass;rear glass;back cover;battery cover', 'camera lens;screen;lcd;oled;' + ACC, ''],
     ]);
-    cf.setFrozenRows(1);
-    cf.autoResizeColumns(1, 5);
   }
+  cf.setFrozenRows(1);
+  cf.autoResizeColumns(1, 5);
 
   // ---- Log
   let lg = ss.getSheetByName(SH_LOG) || ss.insertSheet(SH_LOG);
