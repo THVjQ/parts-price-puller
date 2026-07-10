@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.1
+// @version      1.9.2
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,11 +20,21 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.1';
+  const SCRIPT_VERSION = '1.9.2';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
   const getKey = () => GM_getValue('gasKey', '');
+
+  // Repair common paste mistakes (the base pasted twice, trailing junk after /exec, spaces).
+  function cleanGasUrl(u) {
+    u = String(u || '').trim().replace(/\s+/g, '');
+    const base = 'https://script.google.com/macros/s/';
+    const li = u.lastIndexOf(base);        // if pasted twice, keep from the LAST base
+    if (li > 0) u = u.slice(li);
+    const m = u.match(/^(https?:\/\/\S*?\/exec)/);  // drop anything after the first /exec
+    return m ? m[1] : u;
+  }
 
   // ═══════════════════════ EDIT ME ═══════════════════════
   //
@@ -711,10 +721,11 @@
       if (u === null) return;
       const k = prompt('API key (matches KEY script property):', getKey());
       if (k === null) return;
-      GM_setValue('gasUrl', u.trim());
+      const cleanUrl = cleanGasUrl(u);
+      GM_setValue('gasUrl', cleanUrl);
       GM_setValue('gasKey', k.trim());
       CONFIG = null;
-      status(u.trim() && k.trim() ? 'Saved. Ready.' : '⚠ Not configured');
+      status(cleanUrl && k.trim() ? 'Saved: ' + cleanUrl : '⚠ Not configured');
       loadGrade();
     };
     el.querySelector('#ppp-setgrade').onclick = async () => {
