@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.5
+// @version      1.9.6
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.5';
+  const SCRIPT_VERSION = '1.9.6';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -379,13 +379,13 @@
   // Session cache for searches so re-opening the same product / seed is instant, and so the
   // modal and a later pull don't both pay for the same lookup. 5-minute TTL.
   const searchCache = new Map();
-  async function searchProducts(seed, n) {
+  function searchProducts(seed, n) {
     const key = String(seed).toLowerCase().trim() + '|' + n;
     const hit = searchCache.get(key);
-    if (hit && Date.now() - hit.t < 300000) return hit.items;
-    const items = await SITE.fetchProducts(seed, n);
-    searchCache.set(key, { t: Date.now(), items });
-    return items;
+    if (hit && Date.now() - hit.t < 300000) return hit.p;   // shared promise → dedupes a hover+click
+    const p = SITE.fetchProducts(seed, n).catch(e => { searchCache.delete(key); throw e; });
+    searchCache.set(key, { t: Date.now(), p });
+    return p;
   }
 
   // ---------------- Scheduled auto-run (only works while a tab is open) ----------------
@@ -436,6 +436,10 @@
       btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
       btn.title = 'Pin this product to a price cell';
       btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
+      // Warm the search cache while the pointer is on the button, so the click feels instant.
+      let preTimer;
+      btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => { const t = tileInfo(a, card).title; if (t) searchProducts(t, 12).catch(() => {}); }, 120); });
+      btn.addEventListener('mouseleave', () => clearTimeout(preTimer));
       card.appendChild(btn);
     });
   }
