@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.2
+// @version      1.9.3
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.2';
+  const SCRIPT_VERSION = '1.9.3';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -440,17 +440,26 @@
 
   // Best-guess product title + id off the tile — a search seed and a match hint.
   const stripBtn = s => String(s || '').replace(/📌\s*Pin|✓\s*Pinned/g, '');
+  // Walk up to the smallest ancestor that looks like a real product tile (contains an image).
+  function getCard(anchor, fallback) {
+    let el = anchor.parentElement;
+    for (let i = 0; i < 6 && el && el !== document.body; i++) { if (el.querySelector && el.querySelector('img')) return el; el = el.parentElement; }
+    return anchor.closest('li, article') || fallback || anchor.parentElement || anchor;
+  }
   function tileInfo(anchor, card) {
     const idMatch = (anchor.getAttribute('href') || '').match(/\/products\/detail\/([^/?#]+)/);
-    // The product NAME lives in its own text (usually a second detail link), NOT the image
-    // link we hung the 📌 button on — take the longest detail-link text, else a heading.
+    const tc = getCard(anchor, card);
+    const clean = s => stripBtn(s).replace(/\s+/g, ' ').trim();
     let title = '';
-    card.querySelectorAll('a[href*="/products/detail/"]').forEach(l => {
-      const t = stripBtn(l.textContent).replace(/\s+/g, ' ').trim();
-      if (t.length > title.length) title = t;
-    });
-    if (!title) { const h = card.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]'); title = h ? stripBtn(h.textContent).trim() : ''; }
-    return { hintId: idMatch ? idMatch[1] : '', title: title.replace(/\s+/g, ' ').slice(0, 120) };
+    // 1) longest product-link text (the NAME link, not the image link we hung the button on)
+    tc.querySelectorAll('a[href*="/product"]').forEach(l => { const t = clean(l.textContent); if (t.length > title.length) title = t; });
+    // 2) product image alt — tiles almost always put the product name here
+    if (!title) { const img = tc.querySelector('img[alt]'); if (img) title = clean(img.getAttribute('alt')); }
+    // 3) the clicked link's own title / aria-label attribute
+    if (!title) title = clean(anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '');
+    // 4) any heading / title-ish element in the tile
+    if (!title) { const h = tc.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]'); if (h) title = clean(h.textContent); }
+    return { hintId: idMatch ? idMatch[1] : '', title: title.slice(0, 120) };
   }
 
   const escapeHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -489,9 +498,10 @@
     el.innerHTML =
       '<div class="ppp-modal-box"><div class="ppp-modal-hd">📌 Pin product to a price cell' +
       '<span class="ppp-modal-x">✕</span></div><div class="ppp-modal-bd">' +
-      '<div class="ppp-seed">Product: <b></b></div>' +
       '<label>Device (row)</label><select class="ppp-m-device"></select>' +
       '<label>Part (column)</label><select class="ppp-m-part"></select>' +
+      '<label>Search products (edit if wrong, then Enter)</label>' +
+      '<div class="ppp-seed-row"><input class="ppp-m-seed" placeholder="e.g. iphone 11 lcd"><button class="ppp-m-research sec">🔍</button></div>' +
       '<label>Exact product &amp; variant — the price you will track</label>' +
       '<div class="ppp-cands">Loading…</div>' +
       '<div class="ppp-modal-status"></div>' +
@@ -499,10 +509,10 @@
       '<button class="ppp-m-cancel sec">Cancel</button></div></div>';
     document.body.appendChild(el);
     pinModalEl = el;
-    el.querySelector('.ppp-seed b').textContent = info.title || "(couldn't read title — using device)";
 
     const devSel = el.querySelector('.ppp-m-device');
     const partSel = el.querySelector('.ppp-m-part');
+    const seedInput = el.querySelector('.ppp-m-seed');
     const candsEl = el.querySelector('.ppp-cands');
     const statusEl = el.querySelector('.ppp-modal-status');
     const saveBtn = el.querySelector('.ppp-m-save');
@@ -525,10 +535,12 @@
     preselectDevice(devSel, info.title);              // auto model
     const partGuess = detectPart(info.title);          // auto type
     if (partGuess) partSel.value = partGuess;
+    // Seed the (editable) search box — detected title, else "device + part".
+    seedInput.value = info.title || ((devSel.value || '') + ' ' + (partGuess || '')).trim();
 
     // Rank matches: the tile's own product first, then title contains device + grade, then cheapest.
     function renderCandidates() {
-      const devV = (devSel.value || '').toLowerCase(), gradeGuess = detectGrade(info.title);
+      const devV = (devSel.value || '').toLowerCase(), gradeGuess = detectGrade(seedInput.value);
       const score = c => { let s = 0; const t = (c.title || '').toLowerCase();
         if (info.hintId && c.productId === info.hintId) s += 1000;
         if (devV && t.includes(devV)) s += 20;
@@ -546,14 +558,20 @@
       if (top) { top.checked = true; chosen = candidates[0]; saveBtn.disabled = false; }
     }
 
-    const seed = info.title || devSel.value || '';
-    candsEl.textContent = 'Searching “' + seed + '” …';
-    try { candidates = await SITE.fetchProducts(seed, 30); }
-    catch (e) { candsEl.textContent = '❌ ' + e.message; }
-    if (!pinModalEl) return;
-    if (!candidates.length) candsEl.textContent = '⚠ No products parsed — are you logged in, or did the search action id change? (Debug → Capture search)';
-    else renderCandidates();
+    async function doSearch() {
+      const seed = (seedInput.value || '').trim();
+      if (!seed) { candsEl.textContent = 'Type what to search for above.'; return; }
+      candsEl.textContent = 'Searching “' + seed + '” …'; saveBtn.disabled = true;
+      try { candidates = await SITE.fetchProducts(seed, 30); }
+      catch (e) { candsEl.textContent = '❌ ' + e.message; return; }
+      if (!pinModalEl) return;
+      if (!candidates.length) candsEl.textContent = '⚠ No products — check you are logged in, or edit the search above and press Enter.';
+      else renderCandidates();
+    }
+    el.querySelector('.ppp-m-research').onclick = doSearch;
+    seedInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); doSearch(); } });
     devSel.addEventListener('change', () => { if (candidates.length) renderCandidates(); }); // re-sort on model change
+    doSearch();
 
     saveBtn.onclick = async () => {
       if (!chosen) { statusEl.textContent = 'Pick the exact product/variant first.'; return; }
@@ -632,6 +650,10 @@
         .ppp-modal-bd select{width:100%;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;
           border-radius:4px;padding:5px;font:inherit}
         .ppp-seed{color:#a0c4ff;margin-bottom:4px;word-break:break-word}
+        .ppp-seed-row{display:flex;gap:6px}
+        .ppp-m-seed{flex:1;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;
+          border-radius:4px;padding:5px;font:inherit}
+        .ppp-m-research{width:auto!important;margin-top:0!important;padding:5px 10px!important}
         .ppp-cands{max-height:210px;overflow:auto;border:1px solid #0f3460;border-radius:4px;
           padding:4px;margin-top:2px}
         .ppp-cand{display:flex;gap:6px;align-items:center;padding:4px;border-radius:3px;cursor:pointer}
