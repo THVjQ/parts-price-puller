@@ -1,6 +1,6 @@
 /**
  * PARTS PRICE PULLER — Google Apps Script (bind to your Sheet)
- * v1.3.0 — CrazyParts-only, single-column grid, change colouring + manual lock
+ * v1.4.0 — CrazyParts-only, single-column grid, per-cell product Pins (Setup Mode)
  *
  * SETUP:
  * 1. Create a new Google Sheet
@@ -18,6 +18,7 @@ const SH_PRICES  = 'Prices';
 const SH_DEVICES = 'Devices';
 const SH_CONFIG  = 'Config';
 const SH_LOG     = 'Log';
+const SH_PINS    = 'Pins';   // device+part → one exact CrazyParts product/variant to price
 
 // Part columns, in table order. key must match scrapers.
 const PARTS = [
@@ -117,6 +118,14 @@ function setupSheets() {
   if (lg.getLastRow() < 1) {
     lg.getRange(1, 1, 1, 4).setValues([['Timestamp', 'Source', 'Site', 'Message']]).setFontWeight('bold');
     lg.setFrozenRows(1);
+  }
+
+  // ---- Pins  (device+part → one exact product; written by the userscript's Setup Mode)
+  let pn = ss.getSheetByName(SH_PINS) || ss.insertSheet(SH_PINS);
+  if (pn.getLastRow() < 1) {
+    pn.getRange(1, 1, 1, 7).setValues([['Device', 'Part', 'Product ID', 'Variant ID', 'Title', 'Pinned Price', 'Pinned At']]).setFontWeight('bold');
+    pn.setFrozenRows(1);
+    pn.setColumnWidth(5, 320);
   }
 
   rebuildPricesGrid();
@@ -262,6 +271,45 @@ function getQueries() {
     .map(r => ({ part: String(r[0]).trim(), template: String(r[1]).trim(), match: String(r[2]).trim(), exclude: String(r[3]).trim() }));
 }
 
+// ---------------------------------------------------------------- PINS
+// One row per pinned cell: the exact CrazyParts product+variant a (device, part) pulls from.
+function getPins() {
+  const pn = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_PINS);
+  if (!pn || pn.getLastRow() < 2) return [];
+  return pn.getRange(2, 1, pn.getLastRow() - 1, 7).getValues()
+    .filter(r => r[0] && r[1])
+    .map(r => ({
+      device: String(r[0]).trim(), part: String(r[1]).trim(),
+      productId: String(r[2]).trim(), variantId: String(r[3]).trim(),
+      title: String(r[4] || ''), price: r[5],
+    }));
+}
+
+const pinKey_ = (d, p) => String(d).trim().toLowerCase() + ' ' + String(p).trim().toLowerCase();
+
+// Upsert by (device, part) — re-pinning the same cell overwrites its target.
+function upsertPin_(p) {
+  const pn = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_PINS) || SpreadsheetApp.getActiveSpreadsheet().insertSheet(SH_PINS);
+  if (pn.getLastRow() < 1) pn.getRange(1, 1, 1, 7).setValues([['Device', 'Part', 'Product ID', 'Variant ID', 'Title', 'Pinned Price', 'Pinned At']]).setFontWeight('bold');
+  const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+  const rowData = [p.device, p.part, String(p.productId || ''), String(p.variantId || ''), p.title || '', p.price != null && p.price !== '' ? Number(p.price) : '', ts];
+  const last = pn.getLastRow();
+  const keys = last >= 2 ? pn.getRange(2, 1, last - 1, 2).getValues() : [];
+  for (let i = 0; i < keys.length; i++) {
+    if (pinKey_(keys[i][0], keys[i][1]) === pinKey_(p.device, p.part)) { pn.getRange(2 + i, 1, 1, 7).setValues([rowData]); return; }
+  }
+  pn.appendRow(rowData);
+}
+
+function removePin_(device, part) {
+  const pn = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SH_PINS);
+  if (!pn || pn.getLastRow() < 2) return;
+  const keys = pn.getRange(2, 1, pn.getLastRow() - 1, 2).getValues();
+  for (let i = keys.length - 1; i >= 0; i--) {
+    if (pinKey_(keys[i][0], keys[i][1]) === pinKey_(device, part)) pn.deleteRow(2 + i);
+  }
+}
+
 // ---------------------------------------------------------------- WEB API
 function checkKey_(e) {
   const key = PropertiesService.getScriptProperties().getProperty('KEY') || '';
@@ -282,6 +330,8 @@ function doGet(e) {
       devices: getDevices().filter(d => d.enabled),
       queries: getQueries(),
       parts: PARTS.map(p => p.key),
+      partLabels: PARTS.map(p => ({ key: p.key, label: p.label })),
+      pins: getPins(),
     });
   }
   return json_({ error: 'unknown action' });
@@ -314,6 +364,23 @@ function doPost(e) {
     log_(body.source || '?', body.site, 'Wrote ' + written + ' prices (' + (body.results || []).length + ' received)');
     return json_({ ok: true, written: written });
   }
+
+  // Setup Mode: bind a (device, part) cell to one exact product, and drop its first price in.
+  if (body.action === 'addPin') {
+    upsertPin_(body);
+    if (body.price != null && body.price !== '') {
+      writePrices_('CP', [{ device: body.device, part: body.part, price: Number(body.price), title: body.title || '', url: body.url || '' }]);
+    }
+    log_(body.source || '?', 'CP', 'Pinned ' + body.device + ' / ' + body.part + ' → ' + (body.title || body.productId));
+    return json_({ ok: true, pins: getPins() });
+  }
+  if (body.action === 'removePin') {
+    removePin_(body.device, body.part);
+    log_(body.source || '?', 'CP', 'Unpinned ' + body.device + ' / ' + body.part);
+    return json_({ ok: true, pins: getPins() });
+  }
+  if (body.action === 'listPins') return json_({ ok: true, pins: getPins() });
+
   return json_({ error: 'unknown action' });
 }
 

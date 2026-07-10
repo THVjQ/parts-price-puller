@@ -27,7 +27,16 @@ You now have tabs: **Prices** (the matrix), **Devices** (add/remove/disable devi
 
 First run: open either parts site (logged in), click the 💰 panel bottom-right → **⚙ Settings** → paste your `/exec` URL and `KEY`. Settings are stored in Tampermonkey storage, so script updates never wipe them.
 
-Then **▶ Pull all prices** — walks every enabled device × part query on the current site (~12 min at default rate limit) and writes straight into the sheet. Grade dropdown pushes changes back to the sheet. If a site tab is open at the scheduled time, it auto-runs.
+#### Setup Mode — pin exact products (recommended)
+
+Keyword search often picks the wrong listing. Instead, bind each cell to **one exact product**:
+
+1. In the 💰 panel, click **📌 Setup Mode: OFF** → it turns **ON** (the panel button and 💰 launcher go amber).
+2. Browse CrazyParts normally. A **📌 Pin** button appears on every product tile.
+3. Click **📌 Pin** on the item you want → a dialog opens: choose the **Device** (row) and **Part** (column), then click the **exact product/variant** from the real search results (the price you'll track), and **Pin this product**.
+4. The pin is saved to the **Pins** tab and the price drops into that cell immediately.
+
+Then **▶ Pull pinned prices** re-fetches each pinned item by its stable product/variant **id** and writes its current price — the same physical item every time. **Cells you haven't pinned are left untouched** (no fuzzy matching, so nothing wrong is ever written). To re-pin a cell, just pin a new product to the same Device + Part; to drop one, delete its row on the **Pins** tab.
 
 ### 3. Scheduled scraper (optional — true Sunday 12am automation)
 

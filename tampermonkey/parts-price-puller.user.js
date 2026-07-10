@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.8.0
+// @version      1.9.0
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.8.0';
+  const SCRIPT_VERSION = '1.9.0';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -90,6 +90,8 @@
   const postPrices  = results => api('POST', '', { action: 'prices', site: SITE.key, source: 'tm', results });
   const postGrade   = grade => api('POST', '', { action: 'setGrade', grade, source: 'tm' });
   const postLog     = message => api('POST', '', { action: 'log', site: SITE.key, source: 'tm', message }).catch(() => {});
+  const postAddPin  = pin => api('POST', '', Object.assign({ action: 'addPin', source: 'tm' }, pin));
+  const postRemovePin = (device, part) => api('POST', '', { action: 'removePin', source: 'tm', device, part });
 
   // ---------------- Debug: raw request + diagnosis ----------------
   // Hits the web app exactly like a real call but returns the untouched
@@ -244,6 +246,8 @@
         out.push({
           title: v.name || p.name || '',
           price,
+          productId: p.id != null ? String(p.id) : '',
+          variantId: v.id != null ? String(v.id) : '',
           url: location.origin + '/products/detail/' + (p.id != null ? p.id : '') + (v.id != null ? '?variant_id=' + v.id : ''),
         });
       }
@@ -305,7 +309,10 @@
     return { device: device.name, part: q.part, price: best ? best.price : null, title: best ? best.title : 'NO MATCH — query: ' + query, url: best ? best.url : fallbackUrl };
   }
 
-  // ---------------- Pull run ----------------
+  // ---------------- Pull run (PIN-DRIVEN) ----------------
+  // Only cells you've pinned in Setup Mode get priced. For each pin we re-fetch the exact
+  // product/variant by its stable id and write its CURRENT price. Unpinned cells are left
+  // untouched — no fuzzy matching, so nothing wrong is ever written.
   async function runPull(statusFn) {
     if (running) return;
     running = true; abortFlag = false;
@@ -313,35 +320,49 @@
       statusFn('Fetching config…');
       CONFIG = await getConfig();
       if (CONFIG.error) throw new Error(CONFIG.error);
-      const { devices, queries, grade, rateLimitMs, maxResults } = CONFIG;
-      const total = devices.length * queries.length;
-      let done = 0, batch = [], written = 0;
+      const pins = CONFIG.pins || [];
+      const rateLimitMs = CONFIG.rateLimitMs;
+      if (!pins.length) { statusFn('No pins yet — turn on 📌 Setup Mode and pin items on the site.'); return; }
 
-      for (const device of devices) {
-        for (const q of queries) {
-          if (abortFlag) throw new Error('Aborted');
-          statusFn(`[${++done}/${total}] ${device.name} — ${q.part}`);
-          try {
-            batch.push(await searchOne(device, q, grade, maxResults || 12));
-          } catch (e) {
-            batch.push({ device: device.name, part: q.part, price: null, title: 'ERROR: ' + e.message, url: '' });
-          }
-          if (batch.length >= 40) {
-            const r = await postPrices(batch); written += r.written || 0; batch = [];
-          }
-          await sleep(rateLimitMs || 900);
+      let done = 0, batch = [], written = 0;
+      for (const pin of pins) {
+        if (abortFlag) throw new Error('Aborted');
+        statusFn(`[${++done}/${pins.length}] ${pin.device} — ${pin.part}`);
+        try {
+          const found = await fetchPinPrice(pin);
+          batch.push({
+            device: pin.device, part: pin.part,
+            price: found ? found.price : null,
+            title: found ? found.title : 'PIN NOT FOUND — ' + (pin.title || pin.productId),
+            url: found ? found.url : '',
+          });
+        } catch (e) {
+          batch.push({ device: pin.device, part: pin.part, price: null, title: 'ERROR: ' + e.message, url: '' });
         }
+        if (batch.length >= 40) { const r = await postPrices(batch); written += r.written || 0; batch = []; }
+        await sleep(rateLimitMs || 900);
       }
       if (batch.length) { const r = await postPrices(batch); written += r.written || 0; }
       GM_setValue('lastRun_' + SITE.key, Date.now());
-      statusFn(`✅ Done — ${written} prices written`);
-      postLog(`Pull complete, ${written} written`);
+      statusFn(`✅ Done — ${written}/${pins.length} pinned prices written`);
+      postLog(`Pull complete, ${written} written from ${pins.length} pins`);
     } catch (e) {
       statusFn('❌ ' + e.message);
       postLog('Pull failed: ' + e.message);
     } finally {
       running = false;
     }
+  }
+
+  // Re-locate a pinned product and read its current price. We search with the pinned title
+  // as a seed, then match on the STABLE ids (variant first, then product) — never on text —
+  // so the same physical item is priced every run even if its title wording drifts.
+  async function fetchPinPrice(pin) {
+    const seed = pin.title || pin.device || '';
+    const candidates = await SITE.fetchProducts(seed, 30);
+    let m = pin.variantId && candidates.find(c => c.variantId && String(c.variantId) === String(pin.variantId));
+    if (!m) m = candidates.find(c => String(c.productId) === String(pin.productId));
+    return m ? { price: m.price, title: m.title, url: m.url } : null;
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -363,8 +384,142 @@
     } catch (_) { /* silent */ }
   }
 
+  // ---------------- Setup Mode: pin exact products from the site ----------------
+  let setupMode = GM_getValue('setupMode', false);
+  let pinObserver = null;
+  let pinModalEl = null;
+
+  function setSetupMode(on) {
+    setupMode = on;
+    GM_setValue('setupMode', on);
+    document.documentElement.classList.toggle('ppp-setup', on);
+    if (on) { ensureConfig().then(decorateAllTiles); startTileObserver(); }
+    else { stopTileObserver(); clearTileButtons(); closePinModal(); }
+  }
+
+  async function ensureConfig() {
+    if (!CONFIG || !CONFIG.partLabels) { try { CONFIG = await getConfig(); } catch (e) { CONFIG = CONFIG || {}; } }
+    return CONFIG;
+  }
+
+  // Tag each product tile (found by its detail link) with a 📌 button.
+  function decorateAllTiles() {
+    if (!setupMode) return;
+    document.querySelectorAll('a[href*="/products/detail/"]').forEach(a => {
+      const card = a.closest('li, article, [class*="card" i], [class*="product" i], [class*="item" i]') || a.parentElement;
+      if (!card || card.classList.contains('ppp-carded')) return;
+      card.classList.add('ppp-carded');
+      if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
+      const btn = document.createElement('button');
+      btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
+      btn.title = 'Pin this product to a price cell';
+      btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
+      card.appendChild(btn);
+    });
+  }
+  function clearTileButtons() {
+    document.querySelectorAll('.ppp-pin-btn').forEach(b => b.remove());
+    document.querySelectorAll('.ppp-carded').forEach(c => c.classList.remove('ppp-carded'));
+  }
+  function startTileObserver() {
+    if (pinObserver) return;
+    pinObserver = new MutationObserver(() => { if (setupMode) decorateAllTiles(); });
+    pinObserver.observe(document.body, { childList: true, subtree: true });
+  }
+  function stopTileObserver() { if (pinObserver) { pinObserver.disconnect(); pinObserver = null; } }
+
+  // Best-guess title + product id straight off the tile — a search seed and a match hint.
+  function tileInfo(anchor, card) {
+    const idMatch = (anchor.getAttribute('href') || '').match(/\/products\/detail\/([^/?#]+)/);
+    let title = (anchor.textContent || '').trim();
+    if (!title) { const h = card.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]'); title = h ? h.textContent.trim() : ''; }
+    return { hintId: idMatch ? idMatch[1] : '', title: title.replace(/\s+/g, ' ').slice(0, 120) };
+  }
+
+  const escapeHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function preselectDevice(sel, title) {
+    const t = (title || '').toLowerCase();
+    for (const o of sel.options) { if (o.value && t.includes(o.value.toLowerCase())) { sel.value = o.value; return; } }
+  }
+  function closePinModal() { if (pinModalEl) { pinModalEl.remove(); pinModalEl = null; } }
+
+  // Modal: choose device + part, then the EXACT product/variant (real search results), and pin it.
+  async function openPinModal(anchor, card) {
+    closePinModal();
+    await ensureConfig();
+    const info = tileInfo(anchor, card);
+    const el = document.createElement('div');
+    el.className = 'ppp-modal';
+    el.innerHTML =
+      '<div class="ppp-modal-box"><div class="ppp-modal-hd">📌 Pin product to a price cell' +
+      '<span class="ppp-modal-x">✕</span></div><div class="ppp-modal-bd">' +
+      '<div class="ppp-seed">Search seed: <b></b></div>' +
+      '<label>Device (row)</label><select class="ppp-m-device"></select>' +
+      '<label>Part (column)</label><select class="ppp-m-part"></select>' +
+      '<label>Exact product &amp; variant — the price you will track</label>' +
+      '<div class="ppp-cands">Searching…</div>' +
+      '<div class="ppp-modal-status"></div>' +
+      '<button class="ppp-m-save" disabled>Pin this product</button>' +
+      '<button class="ppp-m-cancel sec">Cancel</button></div></div>';
+    document.body.appendChild(el);
+    pinModalEl = el;
+    el.querySelector('.ppp-seed b').textContent = info.title || '(none)';
+
+    const devSel = el.querySelector('.ppp-m-device');
+    (CONFIG.devices || []).forEach(d => devSel.add(new Option(d.name, d.name)));
+    preselectDevice(devSel, info.title);
+    const partSel = el.querySelector('.ppp-m-part');
+    (CONFIG.partLabels || (CONFIG.parts || []).map(k => ({ key: k, label: k })))
+      .forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', CONFIG.grade || ''), p.key)));
+
+    const candsEl = el.querySelector('.ppp-cands');
+    const statusEl = el.querySelector('.ppp-modal-status');
+    const saveBtn = el.querySelector('.ppp-m-save');
+    let chosen = null;
+
+    el.querySelector('.ppp-modal-x').onclick = closePinModal;
+    el.querySelector('.ppp-m-cancel').onclick = closePinModal;
+    el.addEventListener('click', ev => { if (ev.target === el) closePinModal(); });
+
+    let candidates = [];
+    try { candidates = await SITE.fetchProducts(info.title || '', 30); }
+    catch (e) { candsEl.textContent = '❌ ' + e.message; }
+    if (!candidates.length) {
+      candsEl.textContent = '⚠ No products parsed for that title — are you logged in, or did the search action id change?';
+    } else {
+      candsEl.innerHTML = '';
+      candidates.forEach(c => {
+        const row = document.createElement('label');
+        row.className = 'ppp-cand';
+        row.innerHTML = '<input type="radio" name="ppp-cand"><span>$' + c.price + '</span> <em>' + escapeHtml(c.title) + '</em>';
+        const radio = row.querySelector('input');
+        if (c.productId && c.productId === info.hintId) { radio.checked = true; chosen = c; }
+        radio.addEventListener('change', () => { chosen = c; saveBtn.disabled = false; });
+        candsEl.appendChild(row);
+      });
+      if (chosen) saveBtn.disabled = false;
+    }
+
+    saveBtn.onclick = async () => {
+      if (!chosen) { statusEl.textContent = 'Pick the exact product/variant first.'; return; }
+      saveBtn.disabled = true; statusEl.textContent = 'Pinning…';
+      try {
+        await postAddPin({
+          device: devSel.value, part: partSel.value,
+          productId: chosen.productId, variantId: chosen.variantId,
+          title: chosen.title, price: chosen.price, url: chosen.url,
+        });
+        statusEl.textContent = '✅ Pinned ' + devSel.value + ' / ' + partSel.value + ' → $' + chosen.price;
+        CONFIG = null; // refresh pin list on next pull
+        const b = card.querySelector('.ppp-pin-btn'); if (b) { b.textContent = '✓ Pinned'; b.classList.add('done'); }
+        setTimeout(closePinModal, 1200);
+      } catch (e) { statusEl.textContent = '❌ ' + e.message; saveBtn.disabled = false; }
+    };
+  }
+
   // ---------------- UI panel ----------------
   const ui = buildPanel();
+  if (setupMode) setSetupMode(true);
   setInterval(scheduleCheck, 5 * 60 * 1000);
   setTimeout(scheduleCheck, 15000);
 
@@ -402,6 +557,35 @@
           padding:6px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;
           font-size:11px;color:#9fe6a0;display:none}
         #ppp-debug.show{display:block}
+        /* ── Setup Mode: on-tile pin buttons + assignment modal (global, not scoped) ── */
+        .ppp-pin-btn{position:absolute;top:6px;right:6px;z-index:999999;background:#f0a500;
+          color:#1a1a2e;border:0;border-radius:4px;padding:3px 7px;font:bold 12px/1 monospace;
+          cursor:pointer;box-shadow:0 1px 6px rgba(0,0,0,.4)}
+        .ppp-pin-btn.done{background:#79d279}
+        html.ppp-setup #ppp-fab{outline:3px solid #f0a500}
+        .ppp-modal{position:fixed;inset:0;z-index:1000001;background:rgba(0,0,0,.55);
+          display:flex;align-items:center;justify-content:center}
+        .ppp-modal-box{background:#16213e;color:#e0e0e0;font:13px/1.5 monospace;width:min(460px,92vw);
+          max-height:88vh;overflow:auto;border:1px solid #0f3460;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.6)}
+        .ppp-modal-hd{padding:8px 12px;background:#0f3460;font-weight:bold;display:flex;
+          justify-content:space-between;border-radius:8px 8px 0 0}
+        .ppp-modal-x{cursor:pointer}
+        .ppp-modal-bd{padding:12px}
+        .ppp-modal-bd label{display:block;margin:8px 0 2px;color:#888}
+        .ppp-modal-bd select{width:100%;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;
+          border-radius:4px;padding:5px;font:inherit}
+        .ppp-seed{color:#a0c4ff;margin-bottom:4px;word-break:break-word}
+        .ppp-cands{max-height:210px;overflow:auto;border:1px solid #0f3460;border-radius:4px;
+          padding:4px;margin-top:2px}
+        .ppp-cand{display:flex;gap:6px;align-items:center;padding:4px;border-radius:3px;cursor:pointer}
+        .ppp-cand:hover{background:#0d1a33}
+        .ppp-cand span{color:#79d279;font-weight:bold;min-width:56px}
+        .ppp-cand em{font-style:normal;color:#cfe0ff}
+        .ppp-modal-bd button{background:#e94560;color:#fff;border:0;border-radius:4px;padding:8px 10px;
+          cursor:pointer;font:inherit;width:100%;margin-top:8px}
+        .ppp-modal-bd button.sec{background:#0f3460}
+        .ppp-modal-bd button:disabled{opacity:.5;cursor:default}
+        .ppp-modal-status{margin-top:8px;color:#a0c4ff;min-height:18px;word-break:break-word}
       </style>
       <button id="ppp-fab" title="Parts Price Puller">💰</button>
       <div id="ppp-panel">
@@ -413,7 +597,8 @@
             <option>INCELL</option><option>HARD OLED</option><option>SOFT OLED</option>
           </select>
           <button id="ppp-setgrade" class="sec">Save grade → sheet</button>
-          <button id="ppp-pull">▶ Pull all prices (${host})</button>
+          <button id="ppp-setup" class="sec">📌 Setup Mode: OFF</button>
+          <button id="ppp-pull">▶ Pull pinned prices (${host})</button>
           <button id="ppp-abort" class="sec">■ Abort</button>
           <button id="ppp-settings" class="sec">⚙ Settings (sheet URL + key)</button>
           <div id="ppp-status">Idle. Site: ${SITE.key}</div>
@@ -440,6 +625,18 @@
 
     el.querySelector('#ppp-pull').onclick = () => runPull(status);
     el.querySelector('#ppp-abort').onclick = () => { abortFlag = true; };
+
+    const setupBtn = el.querySelector('#ppp-setup');
+    function reflectSetup() {
+      setupBtn.textContent = '📌 Setup Mode: ' + (setupMode ? 'ON' : 'OFF');
+      setupBtn.style.background = setupMode ? '#f0a500' : '';
+      setupBtn.style.color = setupMode ? '#1a1a2e' : '';
+    }
+    setupBtn.onclick = () => {
+      setSetupMode(!setupMode); reflectSetup();
+      status(setupMode ? 'Setup Mode ON — browse the site and click 📌 Pin on any product.' : 'Setup Mode off.');
+    };
+    reflectSetup();
     el.querySelector('#ppp-test').onclick = () => { el.querySelector('#ppp-debugbox').open = true; debug('Running…'); rawTest(debug); };
     el.querySelector('#ppp-capture').onclick = () => {
       const q = prompt('Search query to capture (do this while logged in):', 'iphone 12 lcd');
