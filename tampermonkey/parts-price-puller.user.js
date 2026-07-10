@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.7
+// @version      1.9.8
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.7';
+  const SCRIPT_VERSION = '1.9.8';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -511,6 +511,50 @@
   const detectGrade = title => { const t = (title || '').toLowerCase(); return GRADES.find(g => t.includes(g)) || ''; };
   function closePinModal() { if (pinModalEl) { pinModalEl.remove(); pinModalEl = null; } }
 
+  // ---- Background pin queue: click Pin → dialog closes instantly, saving happens up top ----
+  const pinQueue = [];
+  let pinWorking = false, pinTotal = 0, pinDone = 0, pinFail = 0, toastHideTimer = null;
+
+  function ensureToast() {
+    let t = document.getElementById('ppp-toast');
+    if (!t) {
+      t = document.createElement('div'); t.id = 'ppp-toast';
+      t.innerHTML = '<div class="ppp-toast-msg"></div><div class="ppp-toast-bar"><i></i></div>';
+      document.body.appendChild(t);
+    }
+    return t;
+  }
+  function updatePinToast() {
+    const t = ensureToast();
+    const pending = pinTotal - pinDone - pinFail;
+    t.querySelector('.ppp-toast-msg').textContent = pending > 0
+      ? '📌 Pinning… ' + (pinDone + pinFail) + '/' + pinTotal + (pinFail ? ' (' + pinFail + ' failed)' : '')
+      : '✅ Pinned ' + pinDone + '/' + pinTotal + (pinFail ? ' · ' + pinFail + ' failed' : '');
+    t.querySelector('.ppp-toast-bar i').style.width = (pinTotal ? Math.round((pinDone + pinFail) / pinTotal * 100) : 0) + '%';
+    clearTimeout(toastHideTimer);
+    if (pending <= 0) toastHideTimer = setTimeout(() => { t.remove(); pinTotal = pinDone = pinFail = 0; }, 3500);
+  }
+  function enqueuePin(pin, cardBtn) { pinTotal++; pinQueue.push({ pin, cardBtn }); updatePinToast(); runPinQueue(); }
+  async function runPinQueue() {
+    if (pinWorking) return;
+    pinWorking = true;
+    while (pinQueue.length) {
+      const { pin, cardBtn } = pinQueue.shift();
+      try {
+        const r = await postAddPin(pin);
+        if (r && r.error) throw new Error(r.error);
+        pinDone++;
+        if (cardBtn) { cardBtn.textContent = '✓ Pinned'; cardBtn.classList.add('done'); }
+      } catch (e) {
+        pinFail++;
+        if (cardBtn) { cardBtn.textContent = '⚠ Retry'; cardBtn.classList.remove('done'); }
+      }
+      updatePinToast();
+    }
+    pinWorking = false;
+    updatePinToast();
+  }
+
   // Modal: auto-detects device + part from the tile, lists the EXACT product/variant options
   // (real search results, best match on top), and pins your choice.
   async function openPinModal(anchor, card) {
@@ -613,22 +657,19 @@
     devSel.addEventListener('change', () => { if (candidates.length) renderCandidates(); }); // re-sort on model change
     doSearch();
 
-    saveBtn.onclick = async () => {
+    saveBtn.onclick = () => {
       if (!chosen) { statusEl.textContent = 'Pick the exact product/variant first.'; return; }
       if (!devSel.value || !partSel.value) { statusEl.textContent = 'Choose a device and a part first.'; return; }
-      saveBtn.disabled = true; statusEl.textContent = 'Pinning…';
-      try {
-        const r = await postAddPin({
-          device: devSel.value, part: partSel.value,
-          productId: chosen.productId, variantId: chosen.variantId,
-          title: chosen.title, price: chosen.price, url: chosen.url,
-        });
-        if (r && r.error) throw new Error(r.error + ' — redeploy Apps Script as a New version');
-        statusEl.textContent = '✅ Pinned ' + devSel.value + ' / ' + partSel.value + ' → $' + chosen.price;
-        // Keep the config cache warm (the pull re-fetches pins itself, so no need to drop it).
-        const b = card.querySelector('.ppp-pin-btn'); if (b) { b.textContent = '✓ Pinned'; b.classList.add('done'); }
-        setTimeout(closePinModal, 1200);
-      } catch (e) { statusEl.textContent = '❌ ' + e.message; saveBtn.disabled = false; }
+      // Queue it and close immediately — saving runs in the background (progress bar up top),
+      // so you can jump straight to pinning the next product.
+      const cardBtn = card.querySelector('.ppp-pin-btn');
+      if (cardBtn) cardBtn.textContent = '⏳ Pinning';
+      enqueuePin({
+        device: devSel.value, part: partSel.value,
+        productId: chosen.productId, variantId: chosen.variantId,
+        title: chosen.title, price: chosen.price, url: chosen.url,
+      }, cardBtn);
+      closePinModal();
     };
   }
 
@@ -705,6 +746,12 @@
         .ppp-modal-bd button.sec{background:#0f3460}
         .ppp-modal-bd button:disabled{opacity:.5;cursor:default}
         .ppp-modal-status{margin-top:8px;color:#a0c4ff;min-height:18px;word-break:break-word}
+        /* Top progress bar for background pinning */
+        #ppp-toast{position:fixed;top:0;left:0;right:0;z-index:1000002;background:#0f3460;color:#fff;
+          font:12px/1.4 monospace;padding:6px 12px 0;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+        #ppp-toast .ppp-toast-msg{text-align:center;padding-bottom:4px}
+        #ppp-toast .ppp-toast-bar{height:3px;background:rgba(255,255,255,.15);border-radius:2px;overflow:hidden}
+        #ppp-toast .ppp-toast-bar i{display:block;height:100%;background:#79d279;width:0;transition:width .25s}
       </style>
       <button id="ppp-fab" title="Parts Price Puller">💰</button>
       <div id="ppp-panel">
