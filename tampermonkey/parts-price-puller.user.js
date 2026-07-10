@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.4
+// @version      1.9.5
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.4';
+  const SCRIPT_VERSION = '1.9.5';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -243,7 +243,7 @@
         'Next-Action': CP_SEARCH_ACTION,
         'Next-Router-State-Tree': CP_STATE_TREE,
       },
-      body: JSON.stringify([query, 1, Math.max(maxResults || 20, 20)]),
+      body: JSON.stringify([query, 1, Math.max(maxResults || 20, 6)]),
     });
     const txt = await res.text();
     const products = parseRscProducts(txt);
@@ -369,12 +369,24 @@
   // so the same physical item is priced every run even if its title wording drifts.
   async function fetchPinPrice(pin) {
     const seed = pin.title || pin.device || '';
-    const candidates = await SITE.fetchProducts(seed, 30);
+    const candidates = await searchProducts(seed, 24);
     let m = pin.variantId && candidates.find(c => c.variantId && String(c.variantId) === String(pin.variantId));
     if (!m) m = candidates.find(c => String(c.productId) === String(pin.productId));
     return m ? { price: m.price, title: m.title, url: m.url } : null;
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Session cache for searches so re-opening the same product / seed is instant, and so the
+  // modal and a later pull don't both pay for the same lookup. 5-minute TTL.
+  const searchCache = new Map();
+  async function searchProducts(seed, n) {
+    const key = String(seed).toLowerCase().trim() + '|' + n;
+    const hit = searchCache.get(key);
+    if (hit && Date.now() - hit.t < 300000) return hit.items;
+    const items = await SITE.fetchProducts(seed, n);
+    searchCache.set(key, { t: Date.now(), items });
+    return items;
+  }
 
   // ---------------- Scheduled auto-run (only works while a tab is open) ----------------
   async function scheduleCheck() {
@@ -572,11 +584,12 @@
       const seed = (seedInput.value || '').trim();
       if (!seed) { candsEl.textContent = 'Type what to search for above.'; return; }
       candsEl.textContent = 'Searching “' + seed + '” …'; saveBtn.disabled = true;
-      try { candidates = await SITE.fetchProducts(seed, 30); }
+      const t0 = Date.now();
+      try { candidates = await searchProducts(seed, 12); }
       catch (e) { candsEl.textContent = '❌ ' + e.message; return; }
       if (!pinModalEl) return;
       if (!candidates.length) candsEl.textContent = '⚠ No products — check you are logged in, or edit the search above and press Enter.';
-      else renderCandidates();
+      else { renderCandidates(); statusEl.textContent = candidates.length + ' results in ' + ((Date.now() - t0) / 1000).toFixed(1) + 's'; }
     }
     el.querySelector('.ppp-m-research').onclick = doSearch;
     seedInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); doSearch(); } });
