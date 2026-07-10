@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.6
+// @version      1.9.7
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.6';
+  const SCRIPT_VERSION = '1.9.7';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -539,7 +539,7 @@
     const candsEl = el.querySelector('.ppp-cands');
     const statusEl = el.querySelector('.ppp-modal-status');
     const saveBtn = el.querySelector('.ppp-m-save');
-    let chosen = null, candidates = [];
+    let chosen = null, candidates = [], showAll = false;
 
     el.querySelector('.ppp-modal-x').onclick = closePinModal;
     el.querySelector('.ppp-m-cancel').onclick = closePinModal;
@@ -572,16 +572,29 @@
         if (devV && t.includes(devV)) s += 20;
         if (gradeGuess && t.includes(gradeGuess)) s += 8; return s; };
       candidates.sort((a, b) => score(b) - score(a) || a.price - b.price);
+      // Show ONLY the product you clicked (its variants) — no clutter. "Show all" reveals the rest.
+      let list = candidates, filtered = false;
+      if (info.hintId && !showAll) {
+        const only = candidates.filter(c => c.productId === info.hintId);
+        if (only.length) { list = only; filtered = true; }
+      }
       candsEl.innerHTML = ''; chosen = null;
-      candidates.forEach(c => {
+      list.forEach(c => {
         const row = document.createElement('label');
         row.className = 'ppp-cand';
         row.innerHTML = '<input type="radio" name="ppp-cand"><span>$' + c.price + '</span> <em>' + escapeHtml(c.title) + '</em>';
         row.querySelector('input').addEventListener('change', () => { chosen = c; saveBtn.disabled = false; });
         candsEl.appendChild(row);
       });
-      const top = candsEl.querySelector('input');       // auto-select best match
-      if (top) { top.checked = true; chosen = candidates[0]; saveBtn.disabled = false; }
+      const top = candsEl.querySelector('input');       // auto-select the clicked product / best match
+      if (top) { top.checked = true; chosen = list[0]; saveBtn.disabled = false; }
+      if (filtered && candidates.length > list.length) {
+        const more = document.createElement('button');
+        more.className = 'sec'; more.textContent = 'Show all ' + candidates.length + ' results';
+        more.style.cssText = 'margin-top:6px';
+        more.onclick = () => { showAll = true; renderCandidates(); };
+        candsEl.appendChild(more);
+      }
     }
 
     async function doSearch() {
