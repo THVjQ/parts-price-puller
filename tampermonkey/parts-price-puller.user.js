@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.3
+// @version      1.9.4
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.3';
+  const SCRIPT_VERSION = '1.9.4';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -431,9 +431,16 @@
     document.querySelectorAll('.ppp-pin-btn').forEach(b => b.remove());
     document.querySelectorAll('.ppp-carded').forEach(c => c.classList.remove('ppp-carded'));
   }
+  let decorateTimer = null;
   function startTileObserver() {
     if (pinObserver) return;
-    pinObserver = new MutationObserver(() => { if (setupMode) decorateAllTiles(); });
+    // Debounce: the storefront mutates the DOM constantly; re-scanning on every mutation
+    // lags the page. Coalesce bursts into one scan 250ms after things settle.
+    pinObserver = new MutationObserver(() => {
+      if (!setupMode) return;
+      clearTimeout(decorateTimer);
+      decorateTimer = setTimeout(decorateAllTiles, 250);
+    });
     pinObserver.observe(document.body, { childList: true, subtree: true });
   }
   function stopTileObserver() { if (pinObserver) { pinObserver.disconnect(); pinObserver = null; } }
@@ -522,9 +529,12 @@
     el.querySelector('.ppp-m-cancel').onclick = closePinModal;
     el.addEventListener('click', ev => { if (ev.target === el) closePinModal(); });
 
-    // Always refresh config so the dropdowns are current (this is what was rendering empty).
-    try { const c = await getConfig(); if (c && !c.error) CONFIG = c; } catch (e) { /* keep any cached */ }
-    if (!pinModalEl) return; // user closed it while we awaited
+    // Serve config from cache for an instant modal — only hit the network if we don't have it
+    // yet (Setup Mode + the panel both prefetch it, so this is usually already warm).
+    if (!(CONFIG && CONFIG.devices && CONFIG.devices.length && (CONFIG.partLabels || CONFIG.parts))) {
+      try { const c = await getConfig(); if (c && !c.error) CONFIG = c; } catch (e) { /* keep any cached */ }
+      if (!pinModalEl) return; // user closed it while we awaited
+    }
     const devices = (CONFIG && CONFIG.devices) || [];
     const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
     if (!devices.length || !parts.length) {
@@ -585,7 +595,7 @@
         });
         if (r && r.error) throw new Error(r.error + ' — redeploy Apps Script as a New version');
         statusEl.textContent = '✅ Pinned ' + devSel.value + ' / ' + partSel.value + ' → $' + chosen.price;
-        CONFIG = null; // refresh pin list on next pull
+        // Keep the config cache warm (the pull re-fetches pins itself, so no need to drop it).
         const b = card.querySelector('.ppp-pin-btn'); if (b) { b.textContent = '✓ Pinned'; b.classList.add('done'); }
         setTimeout(closePinModal, 1200);
       } catch (e) { statusEl.textContent = '❌ ' + e.message; saveBtn.disabled = false; }
