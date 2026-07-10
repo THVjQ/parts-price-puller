@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.0
+// @version      1.9.1
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -20,7 +20,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.0';
+  const SCRIPT_VERSION = '1.9.1';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   const getUrl = () => GM_getValue('gasUrl', '');
@@ -428,87 +428,134 @@
   }
   function stopTileObserver() { if (pinObserver) { pinObserver.disconnect(); pinObserver = null; } }
 
-  // Best-guess title + product id straight off the tile — a search seed and a match hint.
+  // Best-guess product title + id off the tile — a search seed and a match hint.
+  const stripBtn = s => String(s || '').replace(/📌\s*Pin|✓\s*Pinned/g, '');
   function tileInfo(anchor, card) {
     const idMatch = (anchor.getAttribute('href') || '').match(/\/products\/detail\/([^/?#]+)/);
-    let title = (anchor.textContent || '').trim();
-    if (!title) { const h = card.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]'); title = h ? h.textContent.trim() : ''; }
+    // The product NAME lives in its own text (usually a second detail link), NOT the image
+    // link we hung the 📌 button on — take the longest detail-link text, else a heading.
+    let title = '';
+    card.querySelectorAll('a[href*="/products/detail/"]').forEach(l => {
+      const t = stripBtn(l.textContent).replace(/\s+/g, ' ').trim();
+      if (t.length > title.length) title = t;
+    });
+    if (!title) { const h = card.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]'); title = h ? stripBtn(h.textContent).trim() : ''; }
     return { hintId: idMatch ? idMatch[1] : '', title: title.replace(/\s+/g, ' ').slice(0, 120) };
   }
 
   const escapeHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Pick the MOST specific device in the title, so "iPhone 11 Pro Max" beats "iPhone 11".
   function preselectDevice(sel, title) {
     const t = (title || '').toLowerCase();
-    for (const o of sel.options) { if (o.value && t.includes(o.value.toLowerCase())) { sel.value = o.value; return; } }
+    let best = '';
+    for (const o of sel.options) { const v = (o.value || '').toLowerCase(); if (v && t.includes(v) && v.length > best.length) best = v; }
+    if (best) for (const o of sel.options) if ((o.value || '').toLowerCase() === best) { sel.value = o.value; return o.value; }
+    return sel.value;
   }
+  // Guess the part column from the title (order matters — most specific first).
+  const PART_HINTS = [
+    ['BACK_GLASS', /back glass|rear glass|back cover|battery cover/],
+    ['CAM_REAR', /rear camera|back camera|main camera/],
+    ['CAM_FRONT', /front camera|selfie/],
+    ['BAT_SP', /battery service pack/],
+    ['BAT_AM', /battery/],
+    ['SP', /service pack/],
+    ['REFURB', /refurb/],
+    ['OLED', /oled|amoled/],
+    ['LCD', /lcd|incell|screen|display|assembly/],
+  ];
+  const detectPart = title => { const t = (title || '').toLowerCase(); for (const [k, re] of PART_HINTS) if (re.test(t)) return k; return ''; };
+  const GRADES = ['incell', 'hard oled', 'soft oled', 'bq7', 'amp', 'oem', 'genuine', 'aftermarket'];
+  const detectGrade = title => { const t = (title || '').toLowerCase(); return GRADES.find(g => t.includes(g)) || ''; };
   function closePinModal() { if (pinModalEl) { pinModalEl.remove(); pinModalEl = null; } }
 
-  // Modal: choose device + part, then the EXACT product/variant (real search results), and pin it.
+  // Modal: auto-detects device + part from the tile, lists the EXACT product/variant options
+  // (real search results, best match on top), and pins your choice.
   async function openPinModal(anchor, card) {
     closePinModal();
-    await ensureConfig();
     const info = tileInfo(anchor, card);
     const el = document.createElement('div');
     el.className = 'ppp-modal';
     el.innerHTML =
       '<div class="ppp-modal-box"><div class="ppp-modal-hd">📌 Pin product to a price cell' +
       '<span class="ppp-modal-x">✕</span></div><div class="ppp-modal-bd">' +
-      '<div class="ppp-seed">Search seed: <b></b></div>' +
+      '<div class="ppp-seed">Product: <b></b></div>' +
       '<label>Device (row)</label><select class="ppp-m-device"></select>' +
       '<label>Part (column)</label><select class="ppp-m-part"></select>' +
       '<label>Exact product &amp; variant — the price you will track</label>' +
-      '<div class="ppp-cands">Searching…</div>' +
+      '<div class="ppp-cands">Loading…</div>' +
       '<div class="ppp-modal-status"></div>' +
       '<button class="ppp-m-save" disabled>Pin this product</button>' +
       '<button class="ppp-m-cancel sec">Cancel</button></div></div>';
     document.body.appendChild(el);
     pinModalEl = el;
-    el.querySelector('.ppp-seed b').textContent = info.title || '(none)';
+    el.querySelector('.ppp-seed b').textContent = info.title || "(couldn't read title — using device)";
 
     const devSel = el.querySelector('.ppp-m-device');
-    (CONFIG.devices || []).forEach(d => devSel.add(new Option(d.name, d.name)));
-    preselectDevice(devSel, info.title);
     const partSel = el.querySelector('.ppp-m-part');
-    (CONFIG.partLabels || (CONFIG.parts || []).map(k => ({ key: k, label: k })))
-      .forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', CONFIG.grade || ''), p.key)));
-
     const candsEl = el.querySelector('.ppp-cands');
     const statusEl = el.querySelector('.ppp-modal-status');
     const saveBtn = el.querySelector('.ppp-m-save');
-    let chosen = null;
+    let chosen = null, candidates = [];
 
     el.querySelector('.ppp-modal-x').onclick = closePinModal;
     el.querySelector('.ppp-m-cancel').onclick = closePinModal;
     el.addEventListener('click', ev => { if (ev.target === el) closePinModal(); });
 
-    let candidates = [];
-    try { candidates = await SITE.fetchProducts(info.title || '', 30); }
-    catch (e) { candsEl.textContent = '❌ ' + e.message; }
-    if (!candidates.length) {
-      candsEl.textContent = '⚠ No products parsed for that title — are you logged in, or did the search action id change?';
-    } else {
-      candsEl.innerHTML = '';
+    // Always refresh config so the dropdowns are current (this is what was rendering empty).
+    try { const c = await getConfig(); if (c && !c.error) CONFIG = c; } catch (e) { /* keep any cached */ }
+    if (!pinModalEl) return; // user closed it while we awaited
+    const devices = (CONFIG && CONFIG.devices) || [];
+    const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
+    if (!devices.length || !parts.length) {
+      statusEl.textContent = '⚠ Config empty — check ⚙ Settings, and redeploy the Apps Script as a NEW version.';
+    }
+    devices.forEach(d => devSel.add(new Option(d.name, d.name)));
+    parts.forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', (CONFIG && CONFIG.grade) || ''), p.key)));
+    preselectDevice(devSel, info.title);              // auto model
+    const partGuess = detectPart(info.title);          // auto type
+    if (partGuess) partSel.value = partGuess;
+
+    // Rank matches: the tile's own product first, then title contains device + grade, then cheapest.
+    function renderCandidates() {
+      const devV = (devSel.value || '').toLowerCase(), gradeGuess = detectGrade(info.title);
+      const score = c => { let s = 0; const t = (c.title || '').toLowerCase();
+        if (info.hintId && c.productId === info.hintId) s += 1000;
+        if (devV && t.includes(devV)) s += 20;
+        if (gradeGuess && t.includes(gradeGuess)) s += 8; return s; };
+      candidates.sort((a, b) => score(b) - score(a) || a.price - b.price);
+      candsEl.innerHTML = ''; chosen = null;
       candidates.forEach(c => {
         const row = document.createElement('label');
         row.className = 'ppp-cand';
         row.innerHTML = '<input type="radio" name="ppp-cand"><span>$' + c.price + '</span> <em>' + escapeHtml(c.title) + '</em>';
-        const radio = row.querySelector('input');
-        if (c.productId && c.productId === info.hintId) { radio.checked = true; chosen = c; }
-        radio.addEventListener('change', () => { chosen = c; saveBtn.disabled = false; });
+        row.querySelector('input').addEventListener('change', () => { chosen = c; saveBtn.disabled = false; });
         candsEl.appendChild(row);
       });
-      if (chosen) saveBtn.disabled = false;
+      const top = candsEl.querySelector('input');       // auto-select best match
+      if (top) { top.checked = true; chosen = candidates[0]; saveBtn.disabled = false; }
     }
+
+    const seed = info.title || devSel.value || '';
+    candsEl.textContent = 'Searching “' + seed + '” …';
+    try { candidates = await SITE.fetchProducts(seed, 30); }
+    catch (e) { candsEl.textContent = '❌ ' + e.message; }
+    if (!pinModalEl) return;
+    if (!candidates.length) candsEl.textContent = '⚠ No products parsed — are you logged in, or did the search action id change? (Debug → Capture search)';
+    else renderCandidates();
+    devSel.addEventListener('change', () => { if (candidates.length) renderCandidates(); }); // re-sort on model change
 
     saveBtn.onclick = async () => {
       if (!chosen) { statusEl.textContent = 'Pick the exact product/variant first.'; return; }
+      if (!devSel.value || !partSel.value) { statusEl.textContent = 'Choose a device and a part first.'; return; }
       saveBtn.disabled = true; statusEl.textContent = 'Pinning…';
       try {
-        await postAddPin({
+        const r = await postAddPin({
           device: devSel.value, part: partSel.value,
           productId: chosen.productId, variantId: chosen.variantId,
           title: chosen.title, price: chosen.price, url: chosen.url,
         });
+        if (r && r.error) throw new Error(r.error + ' — redeploy Apps Script as a New version');
         statusEl.textContent = '✅ Pinned ' + devSel.value + ' / ' + partSel.value + ' → $' + chosen.price;
         CONFIG = null; // refresh pin list on next pull
         const b = card.querySelector('.ppp-pin-btn'); if (b) { b.textContent = '✓ Pinned'; b.classList.add('done'); }
