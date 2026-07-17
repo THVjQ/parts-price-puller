@@ -1,3 +1,4 @@
+// CP
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
