@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.8
+// @version      1.9.9
 // @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -246,7 +246,22 @@
       },
       body: JSON.stringify([query, 1, Math.max(maxResults || 20, 6)]),
     });
+    // HTTP-level failure: 403/429/503 usually means Cloudflare is rate-limiting or challenging.
+    if (!res.ok) {
+      const blocked = res.status === 403 || res.status === 429 || res.status === 503;
+      const err = new Error('CrazyParts request failed: HTTP ' + res.status + (blocked ? ' — likely a Cloudflare block / rate limit. Solve the check in a normal tab, then retry.' : ''));
+      if (blocked) err.cpBlocked = true;
+      throw err;
+    }
     const txt = await res.text();
+    // A valid search returns an RSC (text/x-component) stream. If we instead get an HTML
+    // document or a Cloudflare interstitial, the search action didn't run — surface it clearly
+    // instead of silently returning "NO MATCH" for every pin.
+    if (/^\s*</.test(txt) || /just a moment|challenge-platform|cf-mitigated|attention required/i.test(txt)) {
+      const err = new Error('CrazyParts returned an HTML/Cloudflare page instead of product data — either a Cloudflare challenge (solve it in a normal tab, then retry) or a stale CP_SEARCH_ACTION id after a site rebuild (see the constant near the top of this script).');
+      err.cpBlocked = true;
+      throw err;
+    }
     const products = parseRscProducts(txt);
     const out = [];
     for (const p of products) {
@@ -349,6 +364,14 @@
           });
         } catch (e) {
           batch.push({ device: pin.device, part: pin.part, price: null, title: 'ERROR: ' + e.message, url: '' });
+          // Cloudflare block / stale action id: every remaining pin would fail the same way and
+          // keep hammering the wall. Stop now and surface the reason instead of grinding through.
+          if (e && e.cpBlocked) {
+            if (batch.length) { const r = await postPrices(batch); written += r.written || 0; batch = []; }
+            statusFn('⛔ Stopped — ' + e.message);
+            postLog('Pull stopped early (blocked): ' + e.message);
+            return;
+          }
         }
         if (batch.length >= 40) { const r = await postPrices(batch); written += r.written || 0; batch = []; }
         await sleep(rateLimitMs || 900);
@@ -380,6 +403,9 @@
   // Session cache for searches so re-opening the same product / seed is instant, and so the
   // modal and a later pull don't both pay for the same lookup. 5-minute TTL.
   const searchCache = new Map();
+  // Guard so a Setup-Mode mouse sweep across tiles can't fire many prefetch server-actions
+  // at once — at most one prefetch is in flight (real clicks still fetch on demand).
+  let prefetchBusy = false;
   function searchProducts(seed, n) {
     const key = String(seed).toLowerCase().trim() + '|' + n;
     const hit = searchCache.get(key);
@@ -439,7 +465,13 @@
       btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
       // Warm the search cache while the pointer is on the button, so the click feels instant.
       let preTimer;
-      btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => { const t = tileInfo(a, card).title; if (t) searchProducts(t, 12).catch(() => {}); }, 120); });
+      btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => {
+        if (prefetchBusy) return;                      // one prefetch at a time — no burst
+        const t = tileInfo(a, card).title;
+        if (!t) return;
+        prefetchBusy = true;
+        searchProducts(t, 12).catch(() => {}).finally(() => { prefetchBusy = false; });
+      }, 120); });
       btn.addEventListener('mouseleave', () => clearTimeout(preTimer));
       card.appendChild(btn);
     });
