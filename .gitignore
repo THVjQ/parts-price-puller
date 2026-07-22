@@ -1,2 +1,17 @@
+# Secrets — supplier logins, site password, ingest key
+.env
 scraper/.env
+
+# Runtime data. THIS is why `git pull` can never clobber live pricing:
+# prices.db holds every price + pin, and every per-store calculator edit.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Sheet exports staged for the one-shot migration
+import/
+
 node_modules/
+npm-debug.log*
+.DS_Store

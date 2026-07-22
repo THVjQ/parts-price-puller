@@ -2,8 +2,8 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      1.9.9
-// @description  Pulls logged-in CrazyParts wholesale prices into a Google Sheet
+// @version      2.0.0
+// @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
 // @supportURL   https://github.com/THVjQ/parts-price-puller/issues
@@ -14,27 +14,31 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @connect      script.google.com
-// @connect      script.googleusercontent.com
+// @connect      pricing.sosphonerepairs.thvjq.com.au
+// @connect      thvjq.com.au
+// @connect      localhost
 // @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '1.9.8';
+  const SCRIPT_VERSION = '2.0.0';
+  const DEFAULT_SITE = 'https://pricing.sosphonerepairs.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
-  const getUrl = () => GM_getValue('gasUrl', '');
-  const getKey = () => GM_getValue('gasKey', '');
+  // v2: these point at the self-hosted site, not Apps Script.
+  const getUrl = () => GM_getValue('siteUrl', DEFAULT_SITE);
+  const getKey = () => GM_getValue('ingestKey', '');
+  // Which grade new pins belong to. Only the graded columns (LCD/OLED) use it — the
+  // server decides, from parts.yml `graded:`. Empty = whatever settings.yml says.
+  const getGrade = () => GM_getValue('grade', '');
 
-  // Repair common paste mistakes (the base pasted twice, trailing junk after /exec, spaces).
-  function cleanGasUrl(u) {
+  // Repair common paste mistakes: missing scheme, trailing slash, a pasted /api path.
+  function cleanSiteUrl(u) {
     u = String(u || '').trim().replace(/\s+/g, '');
-    const base = 'https://script.google.com/macros/s/';
-    const li = u.lastIndexOf(base);        // if pasted twice, keep from the LAST base
-    if (li > 0) u = u.slice(li);
-    const m = u.match(/^(https?:\/\/\S*?\/exec)/);  // drop anything after the first /exec
-    return m ? m[1] : u;
+    if (!u) return '';
+    if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+    return u.replace(/\/+$/, '').replace(/\/(api|login)(\/.*)?$/i, '');
   }
 
   // ═══════════════════════ EDIT ME ═══════════════════════
@@ -79,56 +83,64 @@
   let running = false;
   let abortFlag = false;
 
-  // ---------------- Apps Script comms ----------------
-  function api(method, params, body) {
+  // ---------------- Site comms ----------------
+  // The site authenticates machines with the X-Key header (INGEST_KEY). GM_xmlhttpRequest
+  // is cross-origin by design here, so no CORS dance and no site login cookie is needed.
+  function api(method, path, body) {
     return new Promise((resolve, reject) => {
       if (!getUrl() || !getKey()) return reject(new Error('Not configured — click ⚙ Settings'));
-      const url = getUrl() + '?key=' + encodeURIComponent(getKey()) +
-        (params ? '&' + params : '');
       GM_xmlhttpRequest({
-        method, url,
-        headers: { 'Content-Type': 'text/plain' }, // avoids CORS preflight, GAS still parses
+        method,
+        url: getUrl() + path,
+        headers: { 'Content-Type': 'application/json', 'X-Key': getKey() },
         data: body ? JSON.stringify(body) : undefined,
         onload: r => {
-          try { resolve(JSON.parse(r.responseText)); }
-          catch (e) { reject(new Error('Bad response: ' + r.responseText.slice(0, 200))); }
+          let json;
+          try { json = JSON.parse(r.responseText); }
+          catch (e) { return reject(new Error('HTTP ' + r.status + ' — not JSON: ' + String(r.responseText).slice(0, 200))); }
+          if (r.status >= 400) return reject(new Error(json.error || ('HTTP ' + r.status)));
+          resolve(json);
         },
-        onerror: reject, ontimeout: reject, timeout: 60000,
+        onerror: () => reject(new Error('Network error — is the site reachable, and is it in @connect?')),
+        ontimeout: () => reject(new Error('Timed out')),
+        timeout: 60000,
       });
     });
   }
-  const getConfig   = () => api('GET', 'action=config');
-  const postPrices  = results => api('POST', '', { action: 'prices', site: SITE.key, source: 'tm', results });
-  const postGrade   = grade => api('POST', '', { action: 'setGrade', grade, source: 'tm' });
-  const postLog     = message => api('POST', '', { action: 'log', site: SITE.key, source: 'tm', message }).catch(() => {});
-  const postAddPin  = pin => api('POST', '', Object.assign({ action: 'addPin', source: 'tm' }, pin));
-  const postRemovePin = (device, part) => api('POST', '', { action: 'removePin', source: 'tm', device, part });
+  const getConfig   = () => api('GET', '/api/config');
+  const postPrices  = results => api('POST', '/api/ingest', { source: SITE.key, origin: 'tm', results });
+  const postLog     = message => api('POST', '/api/log', { site: SITE.key, origin: 'tm', message }).catch(() => {});
+  const postAddPin  = pin => api('POST', '/api/pins', Object.assign({ source: SITE.key, origin: 'tm' }, pin));
+  const postRemovePin = (device, part, grade) => api('DELETE', '/api/pins', { device, part, grade, source: SITE.key });
 
   // ---------------- Debug: raw request + diagnosis ----------------
-  // Hits the web app exactly like a real call but returns the untouched
-  // response (status, redirect target, content-type, body) so config
-  // problems — especially the "Anyone with Google account" login page — are visible.
+  // Hits /api/config exactly like a real call but returns the untouched response
+  // (status, content-type, body) so a bad key / wrong host / login redirect is visible.
   function rawTest(out) {
-    if (!getUrl() || !getKey()) { out('❌ Not configured. Click ⚙ Settings and enter your /exec URL + key first.'); return; }
-    const shownUrl = getUrl() + '?key=***&action=config';
-    const realUrl  = getUrl() + '?key=' + encodeURIComponent(getKey()) + '&action=config';
-    out('⏳ GET ' + shownUrl + '\n…');
+    if (!getUrl() || !getKey()) { out('❌ Not configured. Click ⚙ Settings and enter the site URL + ingest key first.'); return; }
+    const realUrl = getUrl() + '/api/config';
+    out('⏳ GET ' + realUrl + '\n(X-Key: ***)\n…');
     GM_xmlhttpRequest({
       method: 'GET', url: realUrl,
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'application/json', 'X-Key': getKey() },
       onload: r => {
         const ct = (String(r.responseHeaders || '').match(/content-type:[^\r\n]*/i) || ['content-type: (none)'])[0].trim();
         const finalUrl = r.finalUrl || '(unknown)';
         const body = String(r.responseText || '');
-        const probe = finalUrl + '\n' + body.slice(0, 1000);
         let verdict;
-        if (/accounts\.google\.com|ServiceLogin|_/i.test(finalUrl) && /accounts\.google\.com|ServiceLogin/i.test(probe)) {
-          verdict = '⚠ REDIRECTED TO GOOGLE LOGIN.\nYour deployment access is "Anyone with Google account".\nFix: Apps Script → Deploy → Manage deployments → ✏️ edit → Who has access = "Anyone" → New version → Deploy.';
+        if (r.status === 401) {
+          verdict = '⚠ 401 — the site rejected the key. It must match INGEST_KEY in the server .env exactly (no quotes, no spaces).';
+        } else if (/\/login/.test(finalUrl) || /<form[^>]*loginbox|Sign in/i.test(body)) {
+          verdict = '⚠ Got the login page. The URL is right but /api/config was not reached — check you pasted the site root (no /login, no trailing path).';
         } else if (/^\s*</.test(body)) {
-          verdict = '⚠ Got HTML, not JSON. Usually: wrong URL (must end in /exec), a stale deployment, or access not set to "Anyone".';
+          verdict = '⚠ Got HTML, not JSON. Usually the wrong host, or a Cloudflare error page in front of the site.';
         } else {
-          try { JSON.parse(body); verdict = '✅ Valid JSON — connection is working. If a pull still fails it is a matching/selector issue, not connectivity.'; }
-          catch (e) { verdict = '⚠ Response is neither HTML nor valid JSON: ' + e.message; }
+          try {
+            const j = JSON.parse(body);
+            verdict = j.error
+              ? '⚠ Site replied with an error: ' + j.error
+              : `✅ Connected — ${(j.devices || []).length} devices, ${(j.partLabels || []).length} parts, ${(j.pins || []).length} pins. If a pull still fails it is matching, not connectivity.`;
+          } catch (e) { verdict = '⚠ Response is neither HTML nor valid JSON: ' + e.message; }
         }
         out(
           'HTTP ' + r.status + ' ' + (r.statusText || '') + '\n' +
@@ -210,8 +222,8 @@
   const lastModelToken = s => { const t = s.split(' ').filter(x => /\d/.test(x)); return t.length ? t[t.length - 1] : ' '; };
 
   // Hardcoded safeguard: things that are never a phone screen/part module, killed on
-  // EVERY search regardless of the sheet Config — films, polarizers, stencils, packs,
-  // lens-only glass, tools, etc. So even an out-of-date Config still gets clean results.
+  // EVERY search regardless of config/parts.yml — films, polarizers, stencils, packs,
+  // lens-only glass, tools, etc. So even out-of-date YAML still gets clean results.
   const GLOBAL_EXCLUDE = [
     'stencil', 'mould', 'mold', 'alignment', 'polarizer', 'film', 'filter', 'pack of',
     'laminating', 'oca', 'mesh', 'backlight', 'flex protection', 'blue light', 'bead',
@@ -357,13 +369,13 @@
         try {
           const found = await fetchPinPrice(pin);
           batch.push({
-            device: pin.device, part: pin.part,
+            device: pin.device, part: pin.part, grade: pin.grade || '',
             price: found ? found.price : null,
             title: found ? found.title : 'PIN NOT FOUND — ' + (pin.title || pin.productId),
             url: found ? found.url : '',
           });
         } catch (e) {
-          batch.push({ device: pin.device, part: pin.part, price: null, title: 'ERROR: ' + e.message, url: '' });
+          batch.push({ device: pin.device, part: pin.part, grade: pin.grade || '', price: null, title: 'ERROR: ' + e.message, url: '' });
           // Cloudflare block / stale action id: every remaining pin would fail the same way and
           // keep hammering the wall. Stop now and surface the reason instead of grinding through.
           if (e && e.cpBlocked) {
@@ -631,10 +643,11 @@
     const devices = (CONFIG && CONFIG.devices) || [];
     const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
     if (!devices.length || !parts.length) {
-      statusEl.textContent = '⚠ Config empty — check ⚙ Settings, and redeploy the Apps Script as a NEW version.';
+      statusEl.textContent = '⚠ Config empty — check ⚙ Settings, and that config/devices.yml + parts.yml loaded on the site (Status panel).';
     }
+    const activeGrade = getGrade() || (CONFIG && CONFIG.grade) || '';
     devices.forEach(d => devSel.add(new Option(d.name, d.name)));
-    parts.forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', (CONFIG && CONFIG.grade) || ''), p.key)));
+    parts.forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', activeGrade), p.key)));
     preselectDevice(devSel, info.title);              // auto model
     const partGuess = detectPart(info.title);          // auto type
     if (partGuess) partSel.value = partGuess;
@@ -698,7 +711,7 @@
       const cardBtn = card.querySelector('.ppp-pin-btn');
       if (cardBtn) cardBtn.textContent = '⏳ Pinning';
       enqueuePin({
-        device: devSel.value, part: partSel.value,
+        device: devSel.value, part: partSel.value, grade: activeGrade,
         productId: chosen.productId, variantId: chosen.variantId,
         title: chosen.title, price: chosen.price, url: chosen.url,
       }, cardBtn);
@@ -790,16 +803,13 @@
       <div id="ppp-panel">
         <div class="hd"><span>💰 Price Puller v${SCRIPT_VERSION}</span><span class="x" id="ppp-close">✕</span></div>
         <div class="bd">
-          <label>Grade (LCD/OLED queries)</label>
-          <select id="ppp-grade">
-            <option>AMP</option><option selected>BQ7</option><option>SP</option>
-            <option>INCELL</option><option>HARD OLED</option><option>SOFT OLED</option>
-          </select>
-          <button id="ppp-setgrade" class="sec">Save grade → sheet</button>
+          <label>Grade (which LCD/OLED column pins land in)</label>
+          <select id="ppp-grade"></select>
           <button id="ppp-setup" class="sec">📌 Setup Mode: OFF</button>
           <button id="ppp-pull">▶ Pull pinned prices (${host})</button>
           <button id="ppp-abort" class="sec">■ Abort</button>
-          <button id="ppp-settings" class="sec">⚙ Settings (sheet URL + key)</button>
+          <button id="ppp-open" class="sec">🔗 Open pricing site</button>
+          <button id="ppp-settings" class="sec">⚙ Settings (site URL + key)</button>
           <div id="ppp-status">Idle. Site: ${SITE.key}</div>
           <details id="ppp-debugbox">
             <summary>🐛 Debug</summary>
@@ -846,10 +856,11 @@
       const u = getUrl(), k = getKey();
       debug(
         'Script version: ' + SCRIPT_VERSION + '\n' +
-        'Site: ' + SITE.key + ' (' + host + ')\n' +
-        'URL set: ' + (u ? u : '(none)') + '\n' +
-        'Key set: ' + (k ? 'yes, ' + k.length + ' chars, ends …' + k.slice(-4) : 'NO') + '\n' +
-        'Ends in /exec: ' + (/\/exec$/.test(u) ? 'yes' : '⚠ NO — must end in /exec')
+        'Supplier: ' + SITE.key + ' (' + host + ')\n' +
+        'Pricing site: ' + (u || '(none)') + '\n' +
+        'Ingest key: ' + (k ? 'set, ' + k.length + ' chars, ends …' + k.slice(-4) : '⚠ NOT SET') + '\n' +
+        'Grade for new pins: ' + (getGrade() || '(site default)') + '\n' +
+        'Endpoints: GET /api/config · POST /api/ingest · POST/DELETE /api/pins'
       );
     };
     el.querySelector('#ppp-copy').onclick = () => {
@@ -858,35 +869,41 @@
         .then(() => status('Debug output copied.'))
         .catch(() => status('Copy failed — select the text manually.'));
     };
+    el.querySelector('#ppp-open').onclick = () => { if (getUrl()) window.open(getUrl(), '_blank', 'noopener'); };
+
     el.querySelector('#ppp-settings').onclick = () => {
-      const u = prompt('Apps Script Web App URL (ends in /exec):', getUrl());
+      const u = prompt('Pricing site URL (root, no trailing path):', getUrl());
       if (u === null) return;
-      const k = prompt('API key (matches KEY script property):', getKey());
+      const k = prompt('Ingest key (matches INGEST_KEY in the site\'s .env):', getKey());
       if (k === null) return;
-      const cleanUrl = cleanGasUrl(u);
-      GM_setValue('gasUrl', cleanUrl);
-      GM_setValue('gasKey', k.trim());
+      const cleanUrl = cleanSiteUrl(u);
+      GM_setValue('siteUrl', cleanUrl);
+      GM_setValue('ingestKey', k.trim());
       CONFIG = null;
       status(cleanUrl && k.trim() ? 'Saved: ' + cleanUrl : '⚠ Not configured');
       loadGrade();
     };
-    el.querySelector('#ppp-setgrade').onclick = async () => {
-      const g = el.querySelector('#ppp-grade').value;
-      status('Saving grade…');
-      try { await postGrade(g); CONFIG = null; status('Grade = ' + g + ' saved. Pull to refresh prices.'); }
-      catch (e) { status('❌ ' + e.message); }
+
+    // The grade is a LOCAL choice: it decides which per-grade column a pin lands in.
+    // It is not pushed anywhere — the site's default grade lives in config/settings.yml.
+    el.querySelector('#ppp-grade').onchange = e => {
+      GM_setValue('grade', e.target.value);
+      status('New pins will go to the ' + e.target.value + ' column.');
     };
 
     function loadGrade() {
       if (!getUrl() || !getKey()) { status('⚠ Not configured — click ⚙ Settings'); return; }
       getConfig().then(c => {
-        if (c && c.grade) {
-          CONFIG = c;
-          const sel = el.querySelector('#ppp-grade');
-          if (![...sel.options].some(o => o.value === c.grade)) sel.add(new Option(c.grade, c.grade));
-          sel.value = c.grade;
-          status('Connected. Grade: ' + c.grade);
-        }
+        if (!c || c.error) return status('⚠ ' + ((c && c.error) || 'no config'));
+        CONFIG = c;
+        const sel = el.querySelector('#ppp-grade');
+        const list = c.grades && c.grades.length ? c.grades : [c.grade];
+        sel.innerHTML = '';
+        list.forEach(g => sel.add(new Option(g, g)));
+        const want = getGrade() || c.grade;
+        sel.value = list.includes(want) ? want : c.grade;
+        GM_setValue('grade', sel.value);
+        status(`Connected — ${(c.devices || []).length} devices, ${(c.pins || []).length} pins. Grade: ${sel.value}`);
       }).catch(e => status('⚠ ' + e.message));
     }
     loadGrade();

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>SOS Parts Pricing</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="/logo.svg" alt="SOS Phone Repairs" class="logo">
+    <div class="brand-text">
+      <strong id="siteTitle">Parts Pricing</strong>
+      <span id="siteSubtitle"></span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <label class="field">
+      <span>Store</span>
+      <select id="storeSel"><option value="">— wholesale only —</option></select>
+    </label>
+
+    <label class="field">
+      <span>Grade</span>
+      <select id="gradeSel"></select>
+    </label>
+
+    <div class="field">
+      <span>Show</span>
+      <div class="seg" id="viewSeg" role="group" aria-label="Price view">
+        <button data-view="wholesale" class="on">Wholesale</button>
+        <button data-view="retail">Retail</button>
+        <button data-view="both">Both</button>
+      </div>
+    </div>
+
+    <label class="field grow">
+      <span>Filter devices</span>
+      <input id="search" type="search" placeholder="iphone 13, s22 ultra…" autocomplete="off">
+    </label>
+
+    <div class="field actions">
+      <span>&nbsp;</span>
+      <div class="btnrow">
+        <button id="calcBtn" class="btn" title="Edit this store's markup / labour / rounding">Calculator</button>
+        <button id="statusBtn" class="btn ghost" title="System status, logs, config">Status</button>
+        <button id="logoutBtn" class="btn ghost" title="Log out">Exit</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <div class="tablewrap" id="tablewrap">
+    <table id="matrix">
+      <thead><tr id="headRow"><th class="devcol">Device</th></tr></thead>
+      <tbody id="body"><tr><td class="loading">Loading matrix…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<footer class="statusbar">
+  <span id="updated">—</span>
+  <span class="sep">·</span>
+  <span id="counts"></span>
+  <span class="sep">·</span>
+  <span id="gitline"></span>
+  <span class="spacer"></span>
+  <span class="legend">
+    <i class="sw down"></i> cheaper than last pull
+    <i class="sw up"></i> dearer
+    <i class="sw pin"></i> pinned
+    <i class="sw man"></i> manual
+  </span>
+</footer>
+
+<!-- cell detail popover -->
+<div id="pop" class="pop" hidden></div>
+
+<!-- calculator drawer -->
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-hd">
+    <strong id="drawerTitle">Calculator</strong>
+    <button class="x" id="drawerClose" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-bd">
+    <p class="hint" id="drawerHint"></p>
+
+    <fieldset>
+      <legend>Markup</legend>
+      <div class="seg wide" id="modeSeg">
+        <button data-mode="flat">Flat %</button>
+        <button data-mode="tiers">Cost tiers</button>
+      </div>
+
+      <label class="row" id="flatRow">
+        <span>Markup %</span>
+        <input type="number" id="markupPercent" step="1" min="0">
+      </label>
+
+      <div id="tiersBox">
+        <table class="tiers">
+          <thead><tr><th>Cost up to</th><th>Markup %</th><th></th></tr></thead>
+          <tbody id="tiersBody"></tbody>
+        </table>
+        <button class="btn ghost small" id="addTier">+ Add tier</button>
+        <p class="hint">First matching row wins. Leave the last “cost up to” blank for “and everything above”.</p>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Then</legend>
+      <label class="row"><span>Labour / fitting $</span><input type="number" id="labour" step="1" min="0"></label>
+      <label class="row check"><input type="checkbox" id="gst"><span>Add GST to retail</span></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Rounding</legend>
+      <label class="row">
+        <span>Mode</span>
+        <select id="roundMode">
+          <option value="none">No rounding</option>
+          <option value="nearest">Nearest</option>
+          <option value="up">Round up</option>
+          <option value="down">Round down</option>
+        </select>
+      </label>
+      <label class="row"><span>Step $</span><input type="number" id="roundStep" step="1" min="1"></label>
+      <label class="row">
+        <span>Price ending</span>
+        <select id="endsWith">
+          <option value="">Whole dollars</option>
+          <option value="0.99">.99</option>
+          <option value="0.95">.95</option>
+          <option value="0.5">.50</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Preview</legend>
+      <table class="preview"><thead><tr><th>Wholesale</th><th>Retail</th><th>Margin</th></tr></thead>
+        <tbody id="previewBody"></tbody></table>
+    </fieldset>
+  </div>
+  <div class="drawer-ft">
+    <button class="btn ghost" id="resetCalc" title="Discard local edits and use config/stores.yml again">Reset to git defaults</button>
+    <button class="btn" id="saveCalc">Save</button>
+  </div>
+</aside>
+
+<!-- status drawer -->
+<aside id="statusDrawer" class="drawer" hidden>
+  <div class="drawer-hd"><strong>Status</strong><button class="x" id="statusClose" aria-label="Close">✕</button></div>
+  <div class="drawer-bd">
+    <div id="statusBody" class="statusgrid">Loading…</div>
+    <fieldset>
+      <legend>Config from git</legend>
+      <p class="hint">Edit <code>config/*.yml</code> on GitHub — the site reloads them automatically. This button pulls immediately instead of waiting.</p>
+      <button class="btn ghost" id="pullBtn">Pull config from git now</button>
+      <pre id="pullOut" class="out" hidden></pre>
+    </fieldset>
+    <fieldset>
+      <legend>Recent activity</legend>
+      <div id="logBody" class="logs">…</div>
+    </fieldset>
+  </div>
+</aside>
+
+<div id="scrim" class="scrim" hidden></div>
+
+<script src="/calc.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

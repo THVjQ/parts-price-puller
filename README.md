@@ -1,78 +1,220 @@
 # 💰 Parts Price Puller
 
-Pulls **logged-in wholesale prices** from [CrazyParts](https://crazyparts.com.au) and [The Parts Home](https://thepartshome.com.au) into a Google Sheet price matrix — iPhone 6→16 + Samsung S8→S25 + A-series, across 9 part types (LCD/OLED by grade, refurb, SP, batteries, cameras, back glass). Grade switching (AMP/BQ7/SP/…), fully editable device list + search queries, and a weekly scheduled pull (default Sunday 12am, changeable in the sheet).
+Self-hosted wholesale price matrix for SOS Phone Repairs, at
+**[pricing.sosphonerepairs.thvjq.com.au](https://pricing.sosphonerepairs.thvjq.com.au)**.
 
-## Components
+Pulls **logged-in wholesale prices** from [CrazyParts](https://crazyparts.com.au) into a
+matrix — iPhone 6→16, Samsung S8→S25 + A-series, across 9 part types (LCD/OLED by grade,
+refurb, SP, batteries, cameras, back glass) — then shows each store its own **retail**
+price from that store's markup / labour / rounding rules.
 
-| Piece | What | Where |
+No Google, no Apps Script, no sheet. Everything runs on your own box.
+
+---
+
+## How it fits together
+
+| Piece | What it does | Runs on |
 |---|---|---|
-| `apps-script/Code.gs` | The Sheet brain — builds the grid, edit menus, web API | Google Apps Script |
-| `tampermonkey/parts-price-puller.user.js` | On-demand pulls using **your browser's logged-in session** | Tampermonkey |
-| `scraper/` | Headless Playwright container — the real unattended weekly pull | Docker (any box/NAS) |
+| `web/` | The site: matrix, store selector, calculator editor, JSON API, login | Docker (Willard / TrueNAS) |
+| `scraper/` | Headless Playwright — the unattended weekly pull | Docker, same stack |
+| `tampermonkey/` | On-demand pulls + 📌 Setup Mode pinning, using **your** logged-in browser session | Tampermonkey |
+| `config/*.yml` | Devices, parts, grades, schedule, store seeds — **edited in git, live on the site** | GitHub |
+| `data/prices.db` | Prices, pins, per-store calculators — **never in git** | Docker volume |
 
-## Install
+That split is the whole design:
 
-### 1. Google Sheet (required, first)
+- **git owns the shape** — which devices are rows, which parts are columns, what gets searched.
+- **the volume owns the numbers** — every price, pin and calculator edit.
 
-1. New Google Sheet → **Extensions → Apps Script** → paste [`apps-script/Code.gs`](apps-script/Code.gs) → save
-2. Run `setupSheets()` once from the editor toolbar (authorise when asked)
-3. **Project Settings → Script properties** → add property `KEY` = any long random string
-4. **Deploy → New deployment → Web app** → *Execute as: Me*, *Access: Anyone* → copy the `/exec` URL
+So `git pull` can never overwrite live pricing, and a store's markup can never be
+clobbered by a deploy.
 
-You now have tabs: **Prices** (the matrix), **Devices** (add/remove/disable devices), **Config** (grade, schedule day/hour, rate limit, per-part search query templates + must/exclude keywords), **Log**. A **💰 Price Puller** menu appears in the sheet for add-device / rebuild / clear.
+---
 
-### 2. Tampermonkey (one click)
+## Live config editing
 
-**[▶ Install userscript](https://raw.githubusercontent.com/THVjQ/parts-price-puller/main/tampermonkey/parts-price-puller.user.js)** — Tampermonkey picks it up automatically, and **auto-updates** whenever this repo's version bumps (`@updateURL` points here).
+Edit `config/devices.yml` (or `parts.yml`, `settings.yml`, `stores.yml`) **on GitHub**,
+commit, and the running site picks it up within `GIT_SYNC_INTERVAL` seconds (default 60).
+No redeploy, no SSH, no restart. The web container re-runs `git fetch && git reset --hard
+origin/main` on a timer and reloads the YAML when the files change.
 
-First run: open either parts site (logged in), click the 💰 panel bottom-right → **⚙ Settings** → paste your `/exec` URL and `KEY`. Settings are stored in Tampermonkey storage, so script updates never wipe them.
+- Impatient? **Status → Pull config from git now**.
+- Broke the YAML? The site keeps serving the last good copy and shows a red banner with
+  the parse error instead of falling over.
+- ⚠ The checkout the container watches is a **mirror of `origin/main`** — it hard-resets.
+  Don't keep uncommitted edits in it. (Set `GIT_SYNC=0` if you want a frozen config.)
 
-#### Setup Mode — pin exact products (recommended)
+App code changes still need a rebuild: `git pull && docker compose up -d --build`.
 
-Keyword search often picks the wrong listing. Instead, bind each cell to **one exact product**:
+---
 
-1. In the 💰 panel, click **📌 Setup Mode: OFF** → it turns **ON** (the panel button and 💰 launcher go amber).
-2. Browse CrazyParts normally. A **📌 Pin** button appears on every product tile.
-3. Click **📌 Pin** on the item you want → a dialog opens: choose the **Device** (row) and **Part** (column), then click the **exact product/variant** from the real search results (the price you'll track), and **Pin this product**.
-4. The pin is saved to the **Pins** tab and the price drops into that cell immediately.
+## Deploy
 
-Then **▶ Pull pinned prices** re-fetches each pinned item by its stable product/variant **id** and writes its current price — the same physical item every time. **Cells you haven't pinned are left untouched** (no fuzzy matching, so nothing wrong is ever written). To re-pin a cell, just pin a new product to the same Device + Part; to drop one, delete its row on the **Pins** tab.
+### TrueNAS SCALE (Willard) — the real deployment
 
-### 3. Scheduled scraper (optional — true Sunday 12am automation)
+Use [`deploy/truenas-scale.yaml`](deploy/truenas-scale.yaml). It uses prebuilt ghcr.io
+images because the TrueNAS Custom App installer cannot build.
 
-Tampermonkey can't run with the browser closed. This container logs in by itself and reads the schedule **live from the sheet**, so changing day/hour in Config just works — no restart.
+1. **Datasets** → create `parts-price-puller`, and under it `repo` and `data`.
+   Back up `data` — it holds every price and every store calculator.
+2. **Apps → Discover Apps → ⋮ → Install via YAML** → paste the file.
+3. Edit every `⚠` line: pool name in the two volume paths, `SITE_PASSWORD`, `INGEST_KEY`
+   (the same value in both services), and the CrazyParts login.
+4. Install. First boot clones this repo into `/repo` by itself — nothing to copy up front.
+5. **Cloudflare** → point `pricing.sosphonerepairs.thvjq.com.au` at
+   `http://<truenas-ip>:8788`, same pattern as sosmessenger. Or uncomment the
+   `cloudflared` service and run it as a tunnel with no open port at all.
+
+Updating: config YAML edits are live. For app updates, **Apps → parts-price-puller → ⋮ →
+Pull image → Restart** (GitHub Actions rebuilds both images on every push to `main`).
+
+### Any other Docker host
 
 ```bash
 git clone https://github.com/THVjQ/parts-price-puller.git
-cd parts-price-puller/scraper
-./install.sh          # creates .env — edit it (URL, KEY, both site logins)
-nano .env
-./install.sh          # pulls prebuilt image (or builds locally) and starts
-docker logs -f parts-price-puller
+cd parts-price-puller
+cp .env.example .env && nano .env      # password, ingest key, CP login
+docker compose up -d --build
 ```
 
-Test immediately: set `RUN_NOW=1` in `.env`, `docker compose up -d`, watch logs, remove it after.
+Update, forever after:
 
-## Updates
+```bash
+git pull && docker compose up -d --build
+```
 
-- **Userscript:** automatic via Tampermonkey (`@updateURL` → this repo, checked on TM's schedule; force-check via TM dashboard → Utilities)
-- **Scraper:** `./update.sh` (git pull + pull/rebuild image + restart, `.env` untouched) — or run [Watchtower](https://containrrr.dev/watchtower/) and it tracks `ghcr.io/thvjq/parts-price-puller:latest` automatically, which GitHub Actions rebuilds on every push to `scraper/`
-- **Apps Script:** re-paste `Code.gs` on changes. Your data lives in the sheet tabs, not the script — `setupSheets()` never overwrites existing Devices/Config/Prices rows
+---
 
-## Customising
+## Using the site
 
-- **Devices** tab: name / search term / aliases (`;` separated, e.g. `SE 2020;SE2`) / enabled tickbox → 💰 menu → *Rebuild Prices grid*
-- **Grade**: Config B2 dropdown or the TM panel — relabels LCD/OLED columns, all future pulls use it in queries
-- **Queries**: Config rows 10+ — full control of search template (`{device}`/`{grade}` placeholders), must-match and exclude keywords per part type
-- **Schedule**: Config B3/B4 — picked up live by both TM and the container
-- **Selectors**: `EDIT ME` block at the top of both scrapers. Defaults assume standard WooCommerce; if everything comes back `NO MATCH`, inspect a product tile on the site and adjust `item`/`title`/`price`. Failed queries are written into the cell note so you can see exactly what was searched
+**Login** — one shared staff password (`SITE_PASSWORD`). Wholesale pricing is never
+public. If you'd rather use Cloudflare Access, set `AUTH_MODE=cf-access` and let Access
+do the auth in front.
 
-## How matching works
+| Control | What it does |
+|---|---|
+| **Store** | Applies that store's calculator and reveals the retail figures |
+| **Grade** | AMP / BQ7 / SP / … — relabels and re-prices the LCD + OLED columns |
+| **Show** | Wholesale · Retail · Both |
+| **Filter** | Live device search |
+| **Calculator** | This store's markup, labour, GST and rounding — with a live preview |
+| **Status** | Config/git health, counts, recent activity, force a config pull |
 
-Search each site's product search → title must contain every device token (with a suffix guard so "iPhone 12" won't match "12 Pro Max") → must hit ≥1 must-keyword, zero exclude-keywords → cheapest survivor wins. Matched title + URL + timestamp land in the cell note. No match writes `—`.
+Click any cell for its source, matched product title, product link, timestamp, what the
+other supplier quoted, and the change since the last pull. Cells tint **green** when the
+price dropped and **red** when it rose; an amber dot means the cell is pinned; a red bar
+means the price was entered by hand and no pull will overwrite it.
 
-## Notes
+Bookmarkable: `?store=lismore&view=both&grade=AMP&q=iphone%2013` — handy for sending a
+store straight to their own retail column. Add `#calc` to open the calculator too.
 
-- Your supplier logins never leave your machine: TM uses your existing session; the container keeps them in your local `.env` (gitignored)
-- Rate-limited (default 900 ms/search, sheet-configurable) — be a polite customer
-- For personal/shop use with accounts you own; respect each site's terms
+### The calculator
+
+```
+retail = round( wholesale × (1 + markup%) + labour )   [+ GST]
+```
+
+`markup` is either flat or cost-tiered (cheap parts carry a much bigger multiplier than
+a $300 service pack — that's what the tier table is for). Rounding does nearest/up/down
+to any step, with an optional `.99` / `.95` ending.
+
+Seeds come from `config/stores.yml`; the moment you press **Save**, that store's
+calculator belongs to the database and git stops touching it. **Reset to git defaults**
+hands it back.
+
+---
+
+## Tampermonkey — pinning and on-demand pulls
+
+**[▶ Install / update userscript](https://raw.githubusercontent.com/THVjQ/parts-price-puller/main/tampermonkey/parts-price-puller.user.js)**
+(auto-updates via `@updateURL`).
+
+First run: open CrazyParts logged in → 💰 panel (bottom-left) → **⚙ Settings** → the site
+URL (`https://pricing.sosphonerepairs.thvjq.com.au`) and the **ingest key** (`INGEST_KEY`
+from `.env`). Both live in Tampermonkey storage, so updates never wipe them.
+
+### Setup Mode — pin exact products
+
+Keyword search picks the wrong listing too often, so each cell is bound to **one exact
+product**:
+
+1. 💰 panel → **📌 Setup Mode: OFF** → **ON**.
+2. Browse CrazyParts. Every product tile gets a **📌 Pin** button.
+3. Click it → pick the **Device** (row) and **Part** (column), then the exact
+   product/variant, → **Pin this product**. The price lands in that cell immediately.
+
+**▶ Pull pinned prices** then re-fetches every pin by its stable product/variant **id**
+and writes the current price — the same physical item every run, no fuzzy matching.
+Unpinned cells are left alone.
+
+The **Grade** dropdown in the panel decides which per-grade column new pins land in
+(LCD/OLED only; everything else ignores grade).
+
+### Scheduled pulls
+
+The `scraper` container logs in by itself and re-prices every pin on the schedule in
+`config/settings.yml` (default Sunday 12am), which it re-reads every 10 minutes — change
+the day/hour in git and the next run follows. Set `PULL_UNPINNED=1` if you also want the
+old fuzzy search to fill in cells that have no pin.
+
+Test it now: `RUN_NOW=1` in `.env`, restart, `docker compose logs -f scraper`.
+
+---
+
+## Migrating off the sheet
+
+1. **Export** the old sheet: File → Download → CSV, for the **Prices** and **Pins** tabs.
+   Drop them in `import/` (gitignored).
+2. **Import**:
+
+   ```bash
+   docker compose exec web node tools/import-sheet-csv.js \
+       --prices /repo/import/Prices.csv --pins /repo/import/Pins.csv --dry-run
+   ```
+
+   Check the report (it lists any device name that doesn't match `config/devices.yml`),
+   then re-run without `--dry-run`. Add `--manual` to import every price as a
+   hand-entered value that pulls will never overwrite.
+
+   Devices and parts don't need importing — `config/devices.yml` and `config/parts.yml`
+   already carry the sheet's full list and search templates.
+3. **Set each store's real margins**: pick the store → Calculator → Save. Or put them in
+   `config/stores.yml` before first boot and they seed straight in.
+4. **Verify**: one manual TM pull and one scheduled scraper run both land in the matrix
+   (Status → Recent activity shows both).
+5. **Retire the sheet.**
+
+---
+
+## API
+
+Machine callers authenticate with `X-Key: <INGEST_KEY>`; browsers use the session cookie.
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /api/prices?grade=&store=` | key or session | The matrix |
+| `POST /api/ingest` | key | Push a batch of prices |
+| `GET /api/config` | key or session | Devices, parts, queries, pins, schedule — for the scraper/TM |
+| `GET/POST/DELETE /api/pins` | key or session | Setup Mode pins |
+| `GET /api/stores`, `PUT/DELETE /api/stores/:id/calculator` | session (writes) | Per-store calculators |
+| `POST /api/git/pull` | key or session | Pull config from git right now (webhook-friendly) |
+| `GET /api/status`, `GET /api/logs` | session | Health, git state, activity |
+| `GET /api/health` | none | Liveness only — no data |
+
+---
+
+## Notes and limits
+
+- **The Parts Home** is listed in `settings.yml` but has **no scraper yet** (`enabled:
+  false`). The matrix already picks the cheapest across sources, so when a TPH scraper
+  lands it just starts appearing. Prices imported or pushed under `TPH` display today.
+- `CP_SEARCH_ACTION` in both scrapers is tied to CrazyParts' current frontend build and
+  changes when they redeploy. Symptom: everything comes back `NO MATCH`. Fix: DevTools →
+  Network → the search POST to `/` → copy the `Next-Action` header into the `EDIT ME`
+  block of `scraper/scraper.js` and the userscript.
+- Supplier logins never leave the box: the userscript uses your browser session, the
+  container reads `.env` (gitignored).
+- Rate-limited (default 900 ms between searches, in `settings.yml`) — be a polite customer.
+- Price history is kept for `retention.priceHistoryDays` (default 400) so the change
+  colouring and `/api/history` have something to compare against.

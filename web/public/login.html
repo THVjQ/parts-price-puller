@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in — SOS Parts Pricing</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body class="login">
+  <form class="loginbox" id="form" autocomplete="on">
+    <img src="/logo.svg" alt="SOS Phone Repairs">
+    <h1>Parts Pricing</h1>
+    <p>Staff only — supplier wholesale pricing.</p>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password" autofocus required>
+    <button class="btn" type="submit" id="go">Sign in</button>
+    <div class="err" id="err"></div>
+  </form>
+
+<script>
+const form = document.getElementById('form');
+const err = document.getElementById('err');
+const go = document.getElementById('go');
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  err.textContent = '';
+  go.disabled = true; go.textContent = 'Checking…';
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: document.getElementById('password').value }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) { location.href = '/'; return; }
+    err.textContent = json.error || 'Sign in failed.';
+  } catch (e) {
+    err.textContent = 'Network error.';
+  }
+  go.disabled = false; go.textContent = 'Sign in';
+});
+</script>
+</body>
+</html>

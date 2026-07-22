@@ -1,17 +1,32 @@
-name: Build scraper image
+name: Build images
+
+# TrueNAS SCALE cannot build images, so main always keeps a prebuilt pair on ghcr.io:
+#   ghcr.io/thvjq/parts-price-puller-web  (the site)
+#   ghcr.io/thvjq/parts-price-puller      (the Willard scraper)
 on:
   push:
     branches: [main]
-    paths: ['scraper/**']
+    paths: ['web/**', 'scraper/**', '.github/workflows/docker.yml']
   workflow_dispatch:
+
 permissions:
   contents: read
   packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - context: ./web
+            image: parts-price-puller-web
+          - context: ./scraper
+            image: parts-price-puller
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -19,8 +34,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: ./scraper
+          context: ${{ matrix.context }}
           push: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           tags: |
-            ghcr.io/thvjq/parts-price-puller:latest
-            ghcr.io/thvjq/parts-price-puller:${{ github.sha }}
+            ghcr.io/thvjq/${{ matrix.image }}:latest
+            ghcr.io/thvjq/${{ matrix.image }}:${{ github.sha }}

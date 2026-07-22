@@ -1,0 +1,97 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# TrueNAS SCALE — Custom App YAML   (Electric Eel 24.10+ / Fangtooth 25.04+, Docker)
+#
+# INSTALL
+#   1. Datasets → create, under your apps dataset:
+#          parts-price-puller
+#          parts-price-puller/repo     ← the git checkout (config/*.yml lives here)
+#          parts-price-puller/data     ← prices.db + store calculators. BACK THIS UP.
+#   2. Apps → Discover Apps → ⋮ (top right) → Install via YAML
+#   3. Paste this file, then edit every ⚠ line below.
+#   4. Install. First boot clones the repo into /repo itself — nothing to pre-copy.
+#   5. Cloudflare: point pricing.sosphonerepairs.thvjq.com.au at
+#      http://<truenas-ip>:8788 (tunnel ingress, or a proxied A record + origin rule).
+#
+# UPDATING
+#   • config/*.yml edits on GitHub  → live within GIT_SYNC_INTERVAL. Nothing to do.
+#   • app code changes              → Apps → parts-price-puller → ⋮ → Pull image, then
+#                                     Restart. (Images are built by GitHub Actions on
+#                                     every push to main.)
+#
+# ⚠ TrueNAS cannot build images, so this file uses the prebuilt ghcr.io ones. The
+#   root docker-compose.yml is the build-from-source version for a plain Docker host.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  web:
+    image: ghcr.io/thvjq/parts-price-puller-web:latest
+    container_name: ppp-web
+    restart: unless-stopped
+    ports:
+      - "8788:8080"                       # ⚠ host port → Cloudflare points here
+    environment:
+      TZ: Australia/Sydney
+
+      # ── auth ────────────────────────────────────────────────────────────
+      AUTH_MODE: password                 # password | cf-access | none
+      SITE_PASSWORD: "⚠ CHANGE ME — long shared staff password"
+      SECURE_COOKIE: "1"                  # 0 only if the site is reached over plain http
+
+      # ── shared key for the scraper + Tampermonkey (openssl rand -hex 32) ─
+      INGEST_KEY: "⚠ CHANGE ME — long random string"
+
+      # ── live config from git ────────────────────────────────────────────
+      GIT_SYNC: "1"
+      GIT_SYNC_INTERVAL: "60"             # seconds between config pulls
+      GIT_REMOTE: "https://github.com/THVjQ/parts-price-puller.git"
+      GIT_BRANCH: "main"
+      # GIT_TOKEN: ""                     # only if the repo is private
+
+      CONFIG_DIR: /repo/config
+      REPO_DIR: /repo
+      DATA_DIR: /app/data
+      PORT: "8080"
+    volumes:
+      - /mnt/POOL/apps/parts-price-puller/repo:/repo          # ⚠ set POOL
+      - /mnt/POOL/apps/parts-price-puller/data:/app/data      # ⚠ set POOL — back this up
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  scraper:
+    image: ghcr.io/thvjq/parts-price-puller:latest
+    container_name: ppp-scraper
+    restart: unless-stopped
+    environment:
+      TZ: Australia/Sydney
+      # Container-to-container: the scheduled pull never leaves the app network.
+      SITE_URL: "http://web:8080"
+      INGEST_KEY: "⚠ CHANGE ME — must match the web service above"
+
+      # ── CrazyParts wholesale login ──────────────────────────────────────
+      CP_USER: "⚠ your@crazyparts.login"
+      CP_PASS: "⚠ yourpassword"
+
+      # RUN_NOW: "1"        # uncomment for one pull immediately on start (testing)
+      # PULL_UNPINNED: "1"  # also fuzzy-search cells with no pin (off by default)
+    depends_on:
+      web:
+        condition: service_started
+    # Playwright needs more than the default 64MB of /dev/shm for Chromium.
+    shm_size: "1gb"
+
+  # ── OPTIONAL: publish via Cloudflare Tunnel instead of opening port 8788 ──────
+  # Delete the `ports:` block on `web` if you use this. Create the tunnel in the
+  # Cloudflare dashboard with a public hostname of
+  # pricing.sosphonerepairs.thvjq.com.au → service http://web:8080, then paste its token.
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: ppp-cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token ⚠ TUNNEL_TOKEN
+  #   depends_on:
+  #     - web

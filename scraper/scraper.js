@@ -1,16 +1,32 @@
 /**
- * Parts Price Puller — Willard scheduled scraper v1.4.0
- * Logs into CrazyParts with Playwright, runs the same search/match logic,
- * POSTs results to the Apps Script web app. Schedule (day/hour) is read
- * LIVE from the sheet Config tab, so changing it in the sheet just works.
+ * Parts Price Puller — Willard scheduled scraper v2.0.0
  *
- * ENV (docker-compose.yml): APPS_SCRIPT_URL, API_KEY,
- *   CP_USER, CP_PASS, TZ, RUN_NOW (optional=1)
+ * Logs into CrazyParts with Playwright and pushes prices to the SELF-HOSTED site
+ * (pricing.sosphonerepairs.thvjq.com.au). No Google Apps Script anywhere.
+ *
+ * Config — devices, parts, queries, pins, schedule, rate limits — comes from
+ * GET {SITE_URL}/api/config, which the web app renders from config/*.yml. That keeps
+ * one YAML parser in one place: edit the YAML in git, the web app reloads it, and the
+ * next scraper tick sees the change without a redeploy.
+ *
+ * Pull order:
+ *   1. PINS  — every pinned cell is re-priced from its exact product/variant id.
+ *   2. QUERY — only if PULL_UNPINNED=1: remaining cells get the old fuzzy search.
+ *      Off by default, because fuzzy matching is what the pin workflow replaced.
+ *
+ * ENV (see .env.example): SITE_URL, INGEST_KEY, CP_USER, CP_PASS, TZ,
+ *                         RUN_NOW=1, PULL_UNPINNED=1
  */
 const { chromium } = require('playwright');
 
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-const API_KEY = process.env.API_KEY;
+const SITE_URL = (process.env.SITE_URL || '').replace(/\/+$/, '');
+const INGEST_KEY = process.env.INGEST_KEY || '';
+const PULL_UNPINNED = process.env.PULL_UNPINNED === '1';
+
+if (!SITE_URL || !INGEST_KEY) {
+  console.error('FATAL: SITE_URL and INGEST_KEY must be set (see .env.example).');
+  process.exit(1);
+}
 
 // ═══════════════ EDIT ME — per site ═══════════════
 //
@@ -25,9 +41,6 @@ const API_KEY = process.env.API_KEY;
 // ⚠ CP_SEARCH_ACTION is build-specific and changes when CrazyParts redeploys their
 //   frontend. Refresh it from DevTools → Network → Fetch/XHR → the POST to "/" →
 //   copy the "Next-Action" request header. (Keep it in sync with the userscript.)
-// ⚠ CP login on the new Next.js site is NOT the same as the old WooCommerce/Magento
-//   page. The selectors below are a best guess — capture the real login form fields
-//   from the site and update userSel/passSel/submitSel/loggedInSel if login fails.
 //
 const CP_SEARCH_ACTION = '704b975d6057afa591a7ded065387da6e10b829c47';
 const CP_STATE_TREE = '%5B%22%22%2C%7B%22children%22%3A%5B%22(site)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C16%5D';
@@ -82,9 +95,11 @@ function parseRscProducts(txt) {
   }
   return [];
 }
-// Run the CrazyParts server-action search inside the logged-in page, return [{title,price,url}].
+// Run the CrazyParts server-action search inside the logged-in page.
+// Returns [{title, price, url, productId, variantId}] — the ids are what pin re-pricing
+// matches on, so a pinned cell tracks the same physical item even if its title drifts.
 async function cpFetchProducts(page, site, query, maxResults) {
-  const txt = await page.evaluate(async ({ action, tree, query, n }) => {
+  const res = await page.evaluate(async ({ action, tree, query, n }) => {
     const r = await fetch('/', {
       method: 'POST', credentials: 'include',
       headers: {
@@ -95,16 +110,30 @@ async function cpFetchProducts(page, site, query, maxResults) {
       },
       body: JSON.stringify([query, 1, n]),
     });
-    return r.text();
+    return { status: r.status, ok: r.ok, text: await r.text() };
   }, { action: site.searchAction, tree: site.stateTree, query, n: Math.max(maxResults || 20, 20) });
+
+  if (!res.ok) {
+    const err = new Error(`CrazyParts HTTP ${res.status}` + ([403, 429, 503].includes(res.status) ? ' — Cloudflare block / rate limit' : ''));
+    err.cpBlocked = [403, 429, 503].includes(res.status);
+    throw err;
+  }
+  if (/^\s*</.test(res.text) || /just a moment|challenge-platform|cf-mitigated|attention required/i.test(res.text)) {
+    const err = new Error('CrazyParts returned HTML/Cloudflare instead of product data — challenge, or a stale CP_SEARCH_ACTION after a site rebuild');
+    err.cpBlocked = true;
+    throw err;
+  }
+
   const out = [];
-  for (const p of parseRscProducts(txt)) {
+  for (const p of parseRscProducts(res.text)) {
     const variants = Array.isArray(p.variants) && p.variants.length ? p.variants : [p];
     for (const v of variants) {
       const price = cpVariantPrice(v);
       if (price === null) continue;
       out.push({
         title: v.name || p.name || '', price,
+        productId: p.id != null ? String(p.id) : '',
+        variantId: v.id != null ? String(v.id) : '',
         url: site.base + '/products/detail/' + (p.id != null ? p.id : '') + (v.id != null ? '?variant_id=' + v.id : ''),
       });
     }
@@ -112,24 +141,27 @@ async function cpFetchProducts(page, site, query, maxResults) {
   return out;
 }
 
-// ---------------- Apps Script comms ----------------
-async function api(method, params, body) {
-  const url = `${APPS_SCRIPT_URL}?key=${encodeURIComponent(API_KEY)}${params ? '&' + params : ''}`;
-  const res = await fetch(url, {
-    method, redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain' },
+// ---------------- Site API ----------------
+async function api(method, path, body) {
+  const res = await fetch(SITE_URL + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-Key': INGEST_KEY },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return res.json();
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch (e) { throw new Error(`${method} ${path} → HTTP ${res.status}, not JSON: ${text.slice(0, 200)}`); }
+  if (!res.ok) throw new Error(`${method} ${path} → ${json.error || res.status}`);
+  return json;
 }
-const getConfig = () => api('GET', 'action=config');
-const postPrices = (site, results) => api('POST', '', { action: 'prices', site, source: 'willard', results });
-const postLog = (site, message) => api('POST', '', { action: 'log', site, source: 'willard', message }).catch(() => {});
+const getConfig = () => api('GET', '/api/config');
+const postPrices = (source, results) => api('POST', '/api/ingest', { source, origin: 'willard', results });
+const postLog = (site, message) => api('POST', '/api/log', { origin: 'willard', site, message }).catch(() => {});
 
-// ---------------- Matching (mirror of TM script) ----------------
+// ---------------- Matching (unpinned/fuzzy path only) ----------------
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9+ ]/g, ' ').replace(/\s+/g, ' ').trim();
 const MODEL_SUFFIXES = ['pro', 'max', 'plus', 'ultra', 'mini', 'fe', 'e'];
-const lastNumToken = s => (s.match(/\d+[a-z]*/g) || ['\u0000']).pop();
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Whole-word test — so "plus" does NOT match inside "AMPLUS", "pro" not inside "protection".
@@ -158,14 +190,14 @@ function titleMatchesDevice(titleN, device) {
     if (sawModel && !okModel) return false;
     if (!devN.includes('+') && !devSuf.includes('plus') && new RegExp('\\b' + escapeRe(model) + '\\+').test(titleN)) return false; // "s22+"
   }
-  if (device.aliases) {
-    const al = device.aliases.split(';').map(norm).filter(Boolean);
+  if (Array.isArray(device.aliases) && device.aliases.length) {
+    const al = device.aliases.map(norm).filter(Boolean);
     if (al.some(a => titleN.includes(a))) return true;
   }
   return true;
 }
 // Hardcoded safeguard — never a phone screen/part module; killed on every search
-// regardless of the sheet Config, so an out-of-date Config still gets clean results.
+// regardless of the YAML, so an out-of-date parts.yml still gets clean results.
 const GLOBAL_EXCLUDE = [
   'stencil', 'mould', 'mold', 'alignment', 'polarizer', 'film', 'filter', 'pack of',
   'laminating', 'oca', 'mesh', 'backlight', 'flex protection', 'blue light', 'bead',
@@ -187,9 +219,8 @@ function keywordCheck(titleN, q) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ---------------- Scrape one site ----------------
-async function scrapeSite(browser, site, cfg) {
-  console.log(`[${site.key}] login…`);
+// ---------------- Login ----------------
+async function login(browser, site) {
   const ctx = await browser.newContext({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36' });
   const page = await ctx.newPage();
   await page.goto(site.loginUrl, { waitUntil: 'domcontentloaded' });
@@ -197,83 +228,137 @@ async function scrapeSite(browser, site, cfg) {
   if (!(await page.$(site.loggedInSel))) {
     await page.fill(site.userSel, site.user);
     await page.fill(site.passSel, site.pass);
-    await Promise.all([
-      page.waitForLoadState('domcontentloaded'),
-      page.click(site.submitSel),
-    ]);
+    await Promise.all([page.waitForLoadState('domcontentloaded'), page.click(site.submitSel)]);
     await sleep(2000);
     if (!(await page.$(site.loggedInSel))) {
       await postLog(site.key, 'LOGIN FAILED — check selectors/credentials');
-      console.error(`[${site.key}] LOGIN FAILED`);
       await ctx.close();
-      return;
+      return null;
     }
   }
-  console.log(`[${site.key}] logged in`);
+  return { ctx, page };
+}
 
+// ---------------- Pass 1: pinned cells (the normal path) ----------------
+// Re-locate each pinned product by its stable ids and read its CURRENT price. We search
+// with the pinned title as a seed, then match on variantId (then productId) — never on
+// text — so the same physical item is priced every run.
+async function pullPins(page, site, cfg, pins) {
+  let done = 0, batch = [], written = 0;
+  for (const pin of pins) {
+    done++;
+    try {
+      const candidates = await cpFetchProducts(page, site, pin.title || pin.device, 24);
+      let m = pin.variantId && candidates.find(c => c.variantId && c.variantId === String(pin.variantId));
+      if (!m) m = candidates.find(c => c.productId === String(pin.productId));
+      batch.push({
+        device: pin.device, part: pin.part, grade: pin.grade || '',
+        price: m ? m.price : null,
+        title: m ? m.title : 'PIN NOT FOUND — ' + (pin.title || pin.productId),
+        url: m ? m.url : '',
+      });
+    } catch (e) {
+      batch.push({ device: pin.device, part: pin.part, grade: pin.grade || '', price: null, title: 'ERROR: ' + e.message.slice(0, 160), url: '' });
+      // A block hits every remaining pin the same way — stop instead of hammering.
+      if (e.cpBlocked) {
+        if (batch.length) written += (await postPrices(site.key, batch)).written || 0;
+        await postLog(site.key, 'Pull stopped early (blocked): ' + e.message);
+        console.error('[' + site.key + '] STOPPED —', e.message);
+        return { written, stopped: true };
+      }
+    }
+    if (done % 20 === 0) console.log(`[${site.key}] pins ${done}/${pins.length}`);
+    if (batch.length >= 40) { written += (await postPrices(site.key, batch)).written || 0; batch = []; }
+    await sleep(cfg.rateLimitMs || 900);
+  }
+  if (batch.length) written += (await postPrices(site.key, batch)).written || 0;
+  return { written, stopped: false };
+}
+
+// ---------------- Pass 2: unpinned cells, fuzzy (opt-in) ----------------
+async function pullUnpinned(page, site, cfg, pinnedKeys) {
   const total = cfg.devices.length * cfg.queries.length;
-  let done = 0, batch = [];
+  let done = 0, batch = [], written = 0;
   for (const device of cfg.devices) {
     for (const q of cfg.queries) {
       done++;
-      const query = q.template.replace('{device}', device.search).replace('{grade}', cfg.grade || '').trim();
+      if (pinnedKeys.has(device.name + '|' + q.part)) continue;   // never fuzz over a pin
+      const grade = q.graded ? (cfg.grade || '') : '';
+      const query = q.template.replace('{device}', device.search).replace('{grade}', grade).trim();
       try {
-        let candidates; // [{title, price, url}]
-        if (site.mode === 'rsc') {
-          candidates = await cpFetchProducts(page, site, query, cfg.maxResults || 20);
-        } else {
-          await page.goto(site.searchUrl(query), { waitUntil: 'domcontentloaded', timeout: 45000 });
-          const items = await page.$$eval(site.item, (els, sel) =>
-            els.slice(0, 15).map(el => {
-              const t = el.querySelector(sel.title);
-              const p = el.querySelector(sel.price);
-              const pi = p && p.querySelector('ins');
-              const a = el.querySelector(sel.link);
-              return {
-                title: t ? t.textContent.trim() : '',
-                priceText: p ? (pi || p).textContent : '',
-                url: a ? a.href : '',
-              };
-            }), { title: site.title, price: site.price, link: site.link });
-          candidates = items.map(it => {
-            const nums = (it.priceText.match(/[\d,]+\.\d{2}|[\d,]+/g) || [])
-              .map(n => parseFloat(n.replace(/,/g, ''))).filter(n => !isNaN(n) && n > 0);
-            return { title: it.title, price: nums.length ? Math.min(...nums) : null, url: it.url };
-          });
-        }
-
+        const candidates = await cpFetchProducts(page, site, query, cfg.maxResults || 20);
         let best = null;
         for (const it of candidates.slice(0, cfg.maxResults || 12)) {
           const titleN = norm(it.title);
-          if (!it.title || it.price === null || it.price === undefined) continue;
+          if (!it.title || it.price == null) continue;
           if (!titleMatchesDevice(titleN, device) || !keywordCheck(titleN, q)) continue;
-          if (!best || it.price < best.price) best = { price: it.price, title: it.title, url: it.url };
+          if (!best || it.price < best.price) best = it;
         }
-        const fallbackUrl = site.searchPageUrl ? site.searchPageUrl(query) : site.searchUrl(query);
         batch.push({
-          device: device.name, part: q.part,
+          device: device.name, part: q.part, grade,
           price: best ? best.price : null,
           title: best ? best.title : 'NO MATCH — query: ' + query,
-          url: best ? best.url : fallbackUrl,
+          url: best ? best.url : site.searchPageUrl(query),
         });
-        if (done % 20 === 0) console.log(`[${site.key}] ${done}/${total}`);
-        if (batch.length >= 40) { await postPrices(site.key, batch); batch = []; }
       } catch (e) {
-        batch.push({ device: device.name, part: q.part, price: null, title: 'ERROR: ' + e.message.slice(0, 120), url: '' });
+        batch.push({ device: device.name, part: q.part, grade, price: null, title: 'ERROR: ' + e.message.slice(0, 160), url: '' });
+        if (e.cpBlocked) {
+          if (batch.length) written += (await postPrices(site.key, batch)).written || 0;
+          await postLog(site.key, 'Unpinned pass stopped (blocked): ' + e.message);
+          return { written, stopped: true };
+        }
       }
+      if (done % 25 === 0) console.log(`[${site.key}] fuzzy ${done}/${total}`);
+      if (batch.length >= 40) { written += (await postPrices(site.key, batch)).written || 0; batch = []; }
       await sleep(cfg.rateLimitMs || 900);
     }
   }
-  if (batch.length) await postPrices(site.key, batch);
-  await postLog(site.key, `Scheduled pull complete (${total} searches)`);
-  console.log(`[${site.key}] done`);
-  await ctx.close();
+  if (batch.length) written += (await postPrices(site.key, batch)).written || 0;
+  return { written, stopped: false };
+}
+
+async function scrapeSite(browser, site, cfg) {
+  console.log(`[${site.key}] login…`);
+  const session = await login(browser, site);
+  if (!session) { console.error(`[${site.key}] LOGIN FAILED`); return; }
+  const { ctx, page } = session;
+  console.log(`[${site.key}] logged in`);
+
+  try {
+    const pins = (cfg.pins || []).filter(p => !p.source || p.source === site.key);
+    let written = 0, stopped = false;
+
+    if (pins.length) {
+      console.log(`[${site.key}] ${pins.length} pinned cells`);
+      const r = await pullPins(page, site, cfg, pins);
+      written += r.written; stopped = r.stopped;
+    } else {
+      console.log(`[${site.key}] no pins`);
+    }
+
+    if (!stopped && PULL_UNPINNED) {
+      const pinnedKeys = new Set(pins.map(p => p.device + '|' + p.part));
+      const r = await pullUnpinned(page, site, cfg, pinnedKeys);
+      written += r.written;
+    }
+
+    if (!pins.length && !PULL_UNPINNED) {
+      await postLog(site.key, 'Scheduled run: nothing to do — no pins, and PULL_UNPINNED is off');
+    } else if (!stopped) {
+      await postLog(site.key, `Scheduled pull complete — ${written} prices written`);
+    }
+    console.log(`[${site.key}] done — ${written} written`);
+  } finally {
+    await ctx.close();
+  }
 }
 
 async function runAll() {
   console.log('=== PULL START', new Date().toISOString(), '===');
-  const cfg = await getConfig();
-  if (cfg.error) { console.error('Config error:', cfg.error); return; }
+  let cfg;
+  try { cfg = await getConfig(); }
+  catch (e) { console.error('Config fetch failed:', e.message); return; }
+
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   try {
     for (const site of SITES) {
@@ -286,12 +371,11 @@ async function runAll() {
   console.log('=== PULL END ===');
 }
 
-// ---------------- Scheduler: reads day/hour live from the sheet ----------------
+// ---------------- Scheduler: day/hour read live from config/settings.yml ----------------
 let lastRunDate = '';
 async function tick() {
   try {
     const cfg = await getConfig();
-    if (cfg.error) return;
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
@@ -303,8 +387,8 @@ async function tick() {
 }
 
 (async () => {
-  if (process.env.RUN_NOW === '1') { await runAll(); }
-  console.log('Scheduler active — checking every 10 min. TZ=' + (process.env.TZ || 'system'));
+  if (process.env.RUN_NOW === '1') await runAll();
+  console.log(`Scheduler active — checking every 10 min. site=${SITE_URL} TZ=${process.env.TZ || 'system'} unpinned=${PULL_UNPINNED}`);
   setInterval(tick, 10 * 60 * 1000);
   tick();
 })();

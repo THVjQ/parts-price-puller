@@ -1,0 +1,100 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PARTS — the COLUMNS of the price matrix.   (was the "Config" tab of the sheet)
+#
+# Per part:
+#   key      required. Machine key. Prices + pins hang off it — ⚠ renaming orphans data.
+#   label    required. Column header. "{grade}" is replaced by the selected grade.
+#   graded   optional. true = this column follows the grade switcher (LCD/OLED).
+#            false/omitted = one price regardless of grade.
+#   query    search template. {device} and {grade} are substituted.
+#   must     ANY-OF keyword list. A title passes if at least one entry matches, where
+#            an entry matches when EVERY word in it appears in the title (any order),
+#            so "lcd assembly" still matches "LCD Screen Assembly".
+#   exclude  kill-list. Any hit rejects the title. Nested lists are flattened, which is
+#            what `*accessories` below does.
+#
+# Pinned cells (Setup Mode) ignore must/exclude entirely — a pin re-prices one exact
+# product id every run. query/must/exclude only matter for unpinned/fuzzy searching.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Never a phone part — reused by every column via `*accessories`.
+accessories: &accessories
+  - stencil
+  - mould
+  - mold
+  - alignment
+  - polarizer
+  - film
+  - filter
+  - pack
+  - sticker
+  - foam
+  - adhesive
+  - tape
+  - protector
+  - laminating
+  - mesh
+  - oca
+  - backlight
+  - bezel
+  - frame only
+  - tool
+  - jig
+  - remover
+
+parts:
+  - key: LCD
+    label: "LCD ({grade})"
+    graded: true
+    query: "{device} LCD {grade}"
+    must: [lcd assembly]
+    exclude: [oled, refurb, service pack, *accessories]
+
+  - key: OLED
+    label: "OLED ({grade})"
+    graded: true
+    query: "{device} OLED {grade}"
+    must: [oled assembly, amoled assembly]
+    exclude: [refurb, service pack, incell, lcd, *accessories]
+
+  - key: REFURB
+    label: REFURB
+    query: "{device} refurb LCD assembly"
+    must: [refurb]
+    exclude: [service pack, *accessories]
+
+  - key: SP
+    label: SP Screen
+    query: "{device} service pack screen"
+    must: [service pack, genuine, apple]
+    exclude: [battery, camera, back glass, *accessories]
+
+  - key: BAT_AM
+    label: Battery (AM)
+    query: "{device} battery"
+    must: [battery]
+    exclude: [service pack, genuine, cover, case, door, tester, *accessories]
+
+  - key: BAT_SP
+    label: Battery SP
+    query: "{device} battery service pack"
+    must: [service pack, genuine]
+    exclude: [screen, lcd, oled, *accessories]
+
+  - key: CAM_REAR
+    label: Rear Camera/s
+    query: "{device} rear camera"
+    must: [rear camera, back camera, main camera]
+    exclude: [lens only, glass, bezel, front, *accessories]
+
+  - key: CAM_FRONT
+    label: Front Camera
+    query: "{device} front camera"
+    must: [front camera]
+    exclude: [lens, rear, back camera, *accessories]
+
+  - key: BACK_GLASS
+    label: Back Glass
+    query: "{device} back glass"
+    must: [back glass, rear glass, back cover, battery cover]
+    exclude: [camera lens, screen, lcd, oled, *accessories]

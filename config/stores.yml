@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STORES — SEED ONLY.
+#
+# On first boot every store below is inserted into the database. After that the
+# DATABASE OWNS the calculators: edits made in the site's calculator editor persist
+# in data/prices.db and `git pull` will NEVER overwrite them.
+#
+# What this file still controls after first boot:
+#   • adding a NEW store here creates it on the next config reload (seeded values)
+#   • removing a store here hides it from the dropdown (its saved calculator is kept)
+#   • the "Reset to git defaults" button in the editor re-reads the values below
+#
+# CALCULATOR
+#   retail = round( (wholesale × (1 + markup%)) + labour )   [+ GST if gst: true]
+#
+#   mode          flat  → markupPercent applies to every price
+#                 tiers → the first tier whose `upTo` ≥ wholesale wins (null = no cap)
+#   labour        flat dollars added after markup (fitting time)
+#   gst           true = add settings.yml → site.gstPercent to the final figure
+#   rounding.mode none | nearest | up | down   (to rounding.step dollars)
+#   rounding.endsWith  null, or cents to snap to — 0.99 gives $149.99-style pricing
+#
+# ⚠ These numbers are a STARTING POINT, not your real margins. Set them per store in
+#   the UI (or here before first boot) — see README "Migration step 2".
+# ─────────────────────────────────────────────────────────────────────────────
+
+defaults: &default_calc
+  mode: tiers
+  markupPercent: 60          # used when mode: flat
+  tiers:
+    - { upTo: 30,   markupPercent: 200 }
+    - { upTo: 60,   markupPercent: 150 }
+    - { upTo: 120,  markupPercent: 110 }
+    - { upTo: 250,  markupPercent: 80 }
+    - { upTo: null, markupPercent: 60 }   # everything above the last capped tier
+  labour: 40
+  gst: true
+  rounding: { mode: nearest, step: 5, endsWith: null }
+
+stores:
+  - { id: airlie-beach,   name: Airlie Beach,    calculator: *default_calc }
+  - { id: alice-springs,  name: Alice Springs,   calculator: *default_calc }
+  - { id: armidale,       name: Armidale,        calculator: *default_calc }
+  - { id: ballina,        name: Ballina,         calculator: *default_calc }
+  - { id: bathurst,       name: Bathurst,        calculator: *default_calc }
+  - { id: byron-bay,      name: Byron Bay,       calculator: *default_calc }
+  - { id: casino,         name: Casino,          calculator: *default_calc }
+  - { id: coffs-harbour,  name: Coffs Harbour,   calculator: *default_calc }
+  - { id: dubbo,          name: Dubbo,           calculator: *default_calc }
+  - { id: east-gardens,   name: East Gardens,    calculator: *default_calc }
+  - { id: forster,        name: Forster,         calculator: *default_calc }
+  - { id: grafton,        name: Grafton,         calculator: *default_calc }
+  - { id: inverell,       name: Inverell,        calculator: *default_calc }
+  - { id: kempsey,        name: Kempsey,         calculator: *default_calc }
+  - { id: lismore,        name: Lismore,         calculator: *default_calc }
+  - { id: moree,          name: Moree,           calculator: *default_calc }
+  - { id: murwillumbah,   name: Murwillumbah,    calculator: *default_calc }
+  - { id: nambucca,       name: Nambucca,        calculator: *default_calc }
+  - { id: port-macquarie, name: Port Macquarie,  calculator: *default_calc }
+  - { id: tamworth,       name: Tamworth,        calculator: *default_calc }
+  - { id: taree,          name: Taree,           calculator: *default_calc }
+  - { id: wagga-wagga,    name: Wagga Wagga,     calculator: *default_calc }
+  - { id: warwick,        name: Warwick,         calculator: *default_calc }

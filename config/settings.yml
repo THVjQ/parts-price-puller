@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SETTINGS — everything that used to live in the sheet's Config settings block.
+# Live-reloaded from git; no restart needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+site:
+  title: SOS Parts Pricing
+  subtitle: Wholesale matrix + per-store retail
+  currency: "$"
+  # Wholesale prices from suppliers are ex-GST. Set to 10 for AU GST, 0 to disable.
+  # Only applied to the RETAIL column, and only when a store's calculator says gst: true.
+  gstPercent: 10
+
+# Grade switcher. `default` is what the matrix opens on and what {grade} resolves to
+# for scraper runs. Adding a grade here just adds it to the dropdown.
+grades:
+  list: [AMP, BQ7, SP, INCELL, HARD OLED, SOFT OLED]
+  default: BQ7
+
+# Suppliers a price can come from. The matrix shows the CHEAPEST across all enabled
+# sources for a cell (unless a MANUAL price exists for it, which always wins).
+#   scraper: true  → the Willard scraper container pulls this source on schedule.
+# ⚠ Only CP has a working scraper today. TPH is listed so imported/manual TPH prices
+#   display correctly; its scraper is not implemented (see README).
+sources:
+  - { key: CP,  label: CrazyParts,      url: "https://www.crazyparts.com.au", scraper: true }
+  - { key: TPH, label: The Parts Home,  url: "https://thepartshome.com.au",   scraper: false, enabled: false }
+
+# Scheduled scraper run. The scraper re-reads this every 10 minutes, so changing the
+# day/hour in git changes the next run without restarting anything.
+schedule:
+  day: Sunday          # Sunday…Saturday
+  hour: 0              # 0–23, container TZ
+  timezone: Australia/Sydney
+
+# Politeness / throughput knobs for both the scraper and the userscript.
+pull:
+  rateLimitMs: 900     # delay between supplier requests
+  maxResults: 12       # candidates scanned per search
+
+# History retention. Prices are append-only; rows older than this are pruned so the
+# DB does not grow forever. The matrix only ever reads the newest row per cell.
+retention:
+  priceHistoryDays: 400
+  logRows: 2000

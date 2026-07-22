@@ -1,0 +1,73 @@
+# Parts Price Puller — self-hosted stack.
+#
+#   deploy / update:   git pull && docker compose up -d --build
+#   logs:              docker compose logs -f web
+#
+# Runs on any Docker host (Willard, a laptop, whatever). For TrueNAS SCALE's
+# "Custom App" installer use deploy/truenas-scale.yaml instead — same stack, but with
+# prebuilt ghcr.io images and absolute dataset paths, because that installer cannot build.
+#
+# WHY THE REPO IS MOUNTED INTO web:
+#   the web container reads config/*.yml straight out of the checkout and re-runs
+#   `git fetch && git reset --hard origin/main` on a timer. Edit a YAML on GitHub →
+#   the live site follows within GIT_SYNC_INTERVAL seconds, no redeploy.
+#   ⚠ That reset means this checkout is a mirror of origin/main. Do not keep local
+#   edits in it — commit them, or set GIT_SYNC=0.
+
+name: parts-price-puller
+
+services:
+  web:
+    build: ./web
+    image: ghcr.io/thvjq/parts-price-puller-web:latest
+    container_name: ppp-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Australia/Sydney}
+      PORT: 8080
+      CONFIG_DIR: /repo/config
+      REPO_DIR: /repo
+      DATA_DIR: /app/data
+      GIT_SYNC: ${GIT_SYNC:-1}
+      GIT_SYNC_INTERVAL: ${GIT_SYNC_INTERVAL:-60}
+      GIT_BRANCH: ${GIT_BRANCH:-main}
+    volumes:
+      - ./data:/app/data        # prices.db + store calculators — NEVER in git
+      - .:/repo                 # this checkout — config/*.yml, live-pulled
+    ports:
+      - "${WEB_PORT:-8788}:8080"
+
+  scraper:
+    build: ./scraper
+    image: ghcr.io/thvjq/parts-price-puller:latest
+    container_name: ppp-scraper
+    restart: unless-stopped
+    # Explicit env rather than env_file: the scraper has no business holding the site
+    # password. It needs the ingest key and the supplier login, nothing else.
+    environment:
+      TZ: ${TZ:-Australia/Sydney}
+      # Internal hop — the scheduled pull never leaves the Docker network, so it does
+      # not need the public hostname or Cloudflare.
+      SITE_URL: http://web:8080
+      INGEST_KEY: ${INGEST_KEY:?set INGEST_KEY in .env}
+      CP_USER: ${CP_USER:-}
+      CP_PASS: ${CP_PASS:-}
+      RUN_NOW: ${RUN_NOW:-}
+      PULL_UNPINNED: ${PULL_UNPINNED:-}
+    shm_size: 1gb          # Chromium needs more than the default 64MB
+    depends_on:
+      - web
+
+  # Optional: publish the site through a Cloudflare Tunnel instead of exposing a port.
+  #   docker compose --profile cloudflare up -d
+  # Create the tunnel in the Cloudflare dashboard, point the public hostname
+  # pricing.sosphonerepairs.thvjq.com.au at http://web:8080, and put the token in .env.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ppp-cloudflared
+    restart: unless-stopped
+    profiles: ["cloudflare"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - web

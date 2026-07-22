@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DEVICES — the ROWS of the price matrix.   (was the "Devices" tab of the sheet)
+#
+# Edit this file in GitHub and the live site picks it up within GIT_SYNC_INTERVAL
+# seconds (default 60) — no redeploy, no restart.
+#
+# Per device:
+#   name     required. Shown in the matrix AND used as the key prices/pins hang off.
+#            ⚠ Renaming a device orphans its existing prices and pins.
+#   search   optional. What gets sent to the supplier search. Defaults to `name`.
+#   group    optional. Row grouping in the UI (see `groups` below). Defaults to "other".
+#   aliases  optional. Extra title spellings that still count as this device.
+#   enabled  optional, defaults to true. false = hidden from the matrix + skipped by pulls.
+# ─────────────────────────────────────────────────────────────────────────────
+
+groups:
+  - { id: iphone,    label: iPhone }
+  - { id: samsung-s, label: Samsung Galaxy S }
+  - { id: samsung-a, label: Samsung Galaxy A }
+  - { id: other,     label: Other }
+
+devices:
+  # ── iPhone ────────────────────────────────────────────────────────────────
+  - { name: iPhone 6,          group: iphone }
+  - { name: iPhone 6 Plus,     group: iphone }
+  - { name: iPhone 6s,         group: iphone }
+  - { name: iPhone 6s Plus,    group: iphone }
+  - { name: "iPhone SE (2016/2020/2022)", search: "iPhone SE", group: iphone, aliases: ["se 2020", "se 2022", "se2"] }
+  - { name: iPhone 7,          group: iphone }
+  - { name: iPhone 7 Plus,     group: iphone }
+  - { name: iPhone 8,          group: iphone }
+  - { name: iPhone 8 Plus,     group: iphone }
+  - { name: iPhone X,          group: iphone }
+  - { name: iPhone XR,         group: iphone }
+  - { name: iPhone XS,         group: iphone }
+  - { name: iPhone XS Max,     group: iphone }
+  - { name: iPhone 11,         group: iphone }
+  - { name: iPhone 11 Pro,     group: iphone }
+  - { name: iPhone 11 Pro Max, group: iphone }
+  - { name: iPhone 12 Mini,    group: iphone }
+  - { name: iPhone 12,         group: iphone }
+  - { name: iPhone 12 Pro,     group: iphone }
+  - { name: iPhone 12 Pro Max, group: iphone }
+  - { name: iPhone 13 Mini,    group: iphone }
+  - { name: iPhone 13,         group: iphone }
+  - { name: iPhone 13 Pro,     group: iphone }
+  - { name: iPhone 13 Pro Max, group: iphone }
+  - { name: iPhone 14,         group: iphone }
+  - { name: iPhone 14 Plus,    group: iphone }
+  - { name: iPhone 14 Pro,     group: iphone }
+  - { name: iPhone 14 Pro Max, group: iphone }
+  - { name: iPhone 15,         group: iphone }
+  - { name: iPhone 15 Plus,    group: iphone }
+  - { name: iPhone 15 Pro,     group: iphone }
+  - { name: iPhone 15 Pro Max, group: iphone }
+  - { name: iPhone 16,         group: iphone }
+  - { name: iPhone 16 Plus,    group: iphone }
+  - { name: iPhone 16 Pro,     group: iphone }
+  - { name: iPhone 16 Pro Max, group: iphone }
+
+  # ── Samsung Galaxy S ──────────────────────────────────────────────────────
+  - { name: Samsung S8,        group: samsung-s }
+  - { name: Samsung S8 Plus,   group: samsung-s }
+  - { name: Samsung S9,        group: samsung-s }
+  - { name: Samsung S9 Plus,   group: samsung-s }
+  - { name: Samsung S10e,      group: samsung-s }
+  - { name: Samsung S10,       group: samsung-s }
+  - { name: Samsung S10 Plus,  group: samsung-s }
+  - { name: Samsung S20,       group: samsung-s }
+  - { name: Samsung S20 Plus,  group: samsung-s }
+  - { name: Samsung S20 Ultra, group: samsung-s }
+  - { name: Samsung S20 FE,    group: samsung-s }
+  - { name: Samsung S21,       group: samsung-s }
+  - { name: Samsung S21 Plus,  group: samsung-s }
+  - { name: Samsung S21 Ultra, group: samsung-s }
+  - { name: Samsung S21 FE,    group: samsung-s }
+  - { name: Samsung S22,       group: samsung-s }
+  - { name: Samsung S22 Plus,  group: samsung-s }
+  - { name: Samsung S22 Ultra, group: samsung-s }
+  - { name: Samsung S23,       group: samsung-s }
+  - { name: Samsung S23 Plus,  group: samsung-s }
+  - { name: Samsung S23 Ultra, group: samsung-s }
+  - { name: Samsung S23 FE,    group: samsung-s }
+  - { name: Samsung S24,       group: samsung-s }
+  - { name: Samsung S24 Plus,  group: samsung-s }
+  - { name: Samsung S24 Ultra, group: samsung-s }
+  - { name: Samsung S24 FE,    group: samsung-s }
+  - { name: Samsung S25,       group: samsung-s }
+  - { name: Samsung S25 Plus,  group: samsung-s }
+  - { name: Samsung S25 Ultra, group: samsung-s }
+
+  # ── Samsung Galaxy A ──────────────────────────────────────────────────────
+  - { name: Samsung A05,  group: samsung-a }
+  - { name: Samsung A05s, group: samsung-a }
+  - { name: Samsung A10,  group: samsung-a }
+  - { name: Samsung A11,  group: samsung-a }
+  - { name: Samsung A12,  group: samsung-a }
+  - { name: Samsung A13,  group: samsung-a }
+  - { name: Samsung A14,  group: samsung-a }
+  - { name: Samsung A15,  group: samsung-a }
+  - { name: Samsung A16,  group: samsung-a }
+  - { name: Samsung A20,  group: samsung-a }
+  - { name: Samsung A21s, group: samsung-a }
+  - { name: Samsung A22,  group: samsung-a }
+  - { name: Samsung A23,  group: samsung-a }
+  - { name: Samsung A24,  group: samsung-a }
+  - { name: Samsung A25,  group: samsung-a }
+  - { name: Samsung A30,  group: samsung-a }
+  - { name: Samsung A32,  group: samsung-a }
+  - { name: Samsung A33,  group: samsung-a }
+  - { name: Samsung A34,  group: samsung-a }
+  - { name: Samsung A35,  group: samsung-a }
+  - { name: Samsung A50,  group: samsung-a }
+  - { name: Samsung A51,  group: samsung-a }
+  - { name: Samsung A52,  group: samsung-a }
+  - { name: Samsung A53,  group: samsung-a }
+  - { name: Samsung A54,  group: samsung-a }
+  - { name: Samsung A55,  group: samsung-a }
+  - { name: Samsung A70,  group: samsung-a }
+  - { name: Samsung A71,  group: samsung-a }
+  - { name: Samsung A72,  group: samsung-a }
+  - { name: Samsung A73,  group: samsung-a }
