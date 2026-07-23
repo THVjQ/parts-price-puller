@@ -32,6 +32,9 @@
 services:
   web:
     image: ghcr.io/thvjq/parts-price-puller-web:latest
+    # Without this, a redeploy reuses the cached :latest and you keep running the old
+    # build — including one that crash-loops.
+    pull_policy: always
     container_name: ppp-web
     restart: unless-stopped
     ports:
@@ -72,6 +75,7 @@ services:
 
   scraper:
     image: ghcr.io/thvjq/parts-price-puller:latest
+    pull_policy: always
     container_name: ppp-scraper
     restart: unless-stopped
     environment:
