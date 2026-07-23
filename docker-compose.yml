@@ -38,7 +38,7 @@ services:
       - ./data:/app/data        # prices.db + store calculators — NEVER in git
       - .:/repo                 # this checkout — config/*.yml, live-pulled
     ports:
-      - "${WEB_PORT:-8788}:8080"
+      - "${WEB_PORT:-8084}:8080"
 
   scraper:
     build: ./scraper

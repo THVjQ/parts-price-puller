@@ -78,7 +78,7 @@ can't build), one port behind the tunnel.
 3. Install. First boot clones this repo into the `ppp_repo` volume by itself — no
    datasets to prepare, nothing to copy up front.
 4. **Cloudflare** → point `pricing.sosphonerepairs.thvjq.com.au` at
-   `http://<truenas-ip>:8788`.
+   `http://<truenas-ip>:8084`.
 5. **GitHub webhook** → `https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing`
    (see [Live config editing](#live-config-editing)).
 

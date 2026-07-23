@@ -4,9 +4,9 @@
 #  Same shape as the THVjQ-Website app: named volumes, no host paths, no build,
 #  one port behind a Cloudflare tunnel.
 # ---------------------------------------------------------------------
-#  Site   : http://<truenas-ip>:8788
-#  Webhook: http://<truenas-ip>:8788/hooks/pricing
-#  Point the Cloudflare tunnel  pricing.sosphonerepairs.thvjq.com.au -> <truenas-ip>:8788
+#  Site   : http://<truenas-ip>:8084
+#  Webhook: http://<truenas-ip>:8084/hooks/pricing
+#  Point the Cloudflare tunnel  pricing.sosphonerepairs.thvjq.com.au -> <truenas-ip>:8084
 #
 #  EDIT THESE:
 #   - SITE_PASSWORD    -> staff login password (username is SOSPhonerepairs)
@@ -35,7 +35,7 @@ services:
     container_name: ppp-web
     restart: unless-stopped
     ports:
-      - "8788:8080"
+      - "8084:8080"
     environment:
       TZ: Australia/Sydney
 
