@@ -254,6 +254,40 @@ tr.hidden { display: none; }
 .pop .title { color: var(--muted); font-size: 12px; margin: 6px 0 0; word-break: break-word; }
 .pop .close { position: absolute; top: 6px; right: 8px; cursor: pointer; color: var(--muted); background: none; border: 0; font-size: 15px; }
 
+/* ───────────────────────────── right-click menu / manual price editor */
+.menu {
+  position: absolute;
+  z-index: 65;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  width: min(250px, 92vw);
+  overflow: hidden;
+  font-size: 13px;
+}
+.menu-hd {
+  padding: 7px 12px;
+  background: var(--accent);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-head);
+  font-size: 12px;
+  font-weight: 700;
+}
+.menu-item {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; font: inherit; color: var(--text);
+  padding: 8px 12px; cursor: pointer;
+}
+.menu-item:hover { background: color-mix(in srgb, var(--brand) 12%, transparent); }
+.menu-item.danger { color: var(--up); }
+.menu-item.muted { color: var(--muted); }
+.menu-edit { padding: 10px 12px; }
+.menu-edit input { width: 100%; }
+.menu-preview { color: var(--brand); font-weight: 700; min-height: 18px; margin: 6px 0; }
+.menu-actions { display: flex; gap: 6px; }
+.menu-actions .btn { flex: 1; }
+
 /* ───────────────────────────── drawers */
 .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 70; }
 .drawer {
@@ -285,13 +319,37 @@ legend { font-family: var(--font-head); font-size: 11px; text-transform: upperca
 .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .hint code { background: var(--accent); padding: 1px 4px; border-radius: 4px; }
 
-table.tiers, table.preview { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
-table.tiers th, table.preview th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 2px 4px; }
-table.tiers td, table.preview td { padding: 3px 4px; }
-table.tiers input { width: 100%; }
-table.tiers .del { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; }
+.drawer.wide { width: min(700px, 100vw); }
+.formula {
+  background: var(--accent); border-radius: var(--radius); padding: 9px 12px;
+  font-size: 13px; margin: 0 0 12px;
+}
+.formula b { color: var(--brand); }
+.formula .hint { margin-top: 2px; display: block; }
+
+table.rules, table.preview { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+table.rules th, table.preview th {
+  text-align: left; font-size: 10px; text-transform: uppercase; color: var(--muted);
+  font-weight: 600; padding: 2px 3px; white-space: nowrap;
+}
+table.rules td, table.preview td { padding: 2px 3px; }
+table.rules td:first-child, table.preview td:first-child {
+  font-size: 12px; white-space: nowrap; width: 150px; max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+table.rules input {
+  width: 100%; min-width: 52px; padding: 4px 5px; min-height: 30px;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+table.rules input::placeholder { color: var(--muted); opacity: .65; font-style: italic; }
+table.rules tr.baserule { background: color-mix(in srgb, var(--brand) 7%, transparent); }
+table.rules tr.baserule td:first-child { font-weight: 700; }
+table.rules td.example {
+  font-variant-numeric: tabular-nums; text-align: right; font-weight: 700;
+  color: var(--brand); white-space: nowrap; padding-left: 8px;
+}
 table.preview td { font-variant-numeric: tabular-nums; }
-table.preview td:nth-child(2) { font-weight: 700; color: var(--brand); }
+table.preview td:not(:first-child) { font-weight: 700; color: var(--brand); }
 
 .statusgrid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; margin-bottom: 14px; }
 .statusgrid b { color: var(--muted); font-weight: 400; }

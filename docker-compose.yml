@@ -9,8 +9,10 @@
 #
 # WHY THE REPO IS MOUNTED INTO web:
 #   the web container reads config/*.yml straight out of the checkout and re-runs
-#   `git fetch && git reset --hard origin/main` on a timer. Edit a YAML on GitHub →
-#   the live site follows within GIT_SYNC_INTERVAL seconds, no redeploy.
+#   `git fetch && git reset --hard origin/main` on a timer — the same deploy pattern
+#   as thvjq.com.au. Edit a YAML on GitHub → the live site follows within
+#   GIT_SYNC_INTERVAL seconds, or instantly if you point a GitHub push webhook at
+#   /hooks/pricing (set WEBHOOK_SECRET in .env).
 #   ⚠ That reset means this checkout is a mirror of origin/main. Do not keep local
 #   edits in it — commit them, or set GIT_SYNC=0.
 
@@ -30,7 +32,7 @@ services:
       REPO_DIR: /repo
       DATA_DIR: /app/data
       GIT_SYNC: ${GIT_SYNC:-1}
-      GIT_SYNC_INTERVAL: ${GIT_SYNC_INTERVAL:-60}
+      GIT_SYNC_INTERVAL: ${GIT_SYNC_INTERVAL:-120}
       GIT_BRANCH: ${GIT_BRANCH:-main}
     volumes:
       - ./data:/app/data        # prices.db + store calculators — NEVER in git

@@ -20,11 +20,11 @@ grades:
 # Suppliers a price can come from. The matrix shows the CHEAPEST across all enabled
 # sources for a cell (unless a MANUAL price exists for it, which always wins).
 #   scraper: true  → the Willard scraper container pulls this source on schedule.
-# ⚠ Only CP has a working scraper today. TPH is listed so imported/manual TPH prices
-#   display correctly; its scraper is not implemented (see README).
 sources:
-  - { key: CP,  label: CrazyParts,      url: "https://www.crazyparts.com.au", scraper: true }
-  - { key: TPH, label: The Parts Home,  url: "https://thepartshome.com.au",   scraper: false, enabled: false }
+  - { key: CP,  label: CrazyParts, url: "https://www.crazyparts.com.au", scraper: true }
+  # The Parts Home is parked — uncomment to bring it back. Nothing else needs changing:
+  # the matrix already picks the cheapest across whatever sources are enabled here.
+  # - { key: TPH, label: The Parts Home, url: "https://thepartshome.com.au", scraper: false }
 
 # Scheduled scraper run. The scraper re-reads this every 10 minutes, so changing the
 # day/hour in git changes the next run without restarting anything.

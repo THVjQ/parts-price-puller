@@ -13,7 +13,9 @@
     <img src="/logo.svg" alt="SOS Phone Repairs">
     <h1>Parts Pricing</h1>
     <p>Staff only — supplier wholesale pricing.</p>
-    <input type="password" id="password" placeholder="Password" autocomplete="current-password" autofocus required>
+    <input type="text" id="username" placeholder="Username" autocomplete="username"
+           autocapitalize="none" autocorrect="off" spellcheck="false" autofocus required>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
     <button class="btn" type="submit" id="go">Sign in</button>
     <div class="err" id="err"></div>
   </form>
@@ -30,7 +32,10 @@ form.addEventListener('submit', async e => {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: document.getElementById('password').value }),
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
     });
     const json = await res.json().catch(() => ({}));
     if (res.ok) { location.href = '/'; return; }

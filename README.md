@@ -4,9 +4,9 @@ Self-hosted wholesale price matrix for SOS Phone Repairs, at
 **[pricing.sosphonerepairs.thvjq.com.au](https://pricing.sosphonerepairs.thvjq.com.au)**.
 
 Pulls **logged-in wholesale prices** from [CrazyParts](https://crazyparts.com.au) into a
-matrix — iPhone 6→16, Samsung S8→S25 + A-series, across 9 part types (LCD/OLED by grade,
-refurb, SP, batteries, cameras, back glass) — then shows each store its own **retail**
-price from that store's markup / labour / rounding rules.
+matrix — iPhone 6→16, Samsung S8→S25 + A-series, across 10 part types (LCD/OLED by grade,
+refurb, SP, batteries, cameras, charging port, back glass) — then shows each store its own
+**retail** price from per-part, per-device-family rules.
 
 No Google, no Apps Script, no sheet. Everything runs on your own box.
 
@@ -34,12 +34,27 @@ clobbered by a deploy.
 
 ## Live config editing
 
-Edit `config/devices.yml` (or `parts.yml`, `settings.yml`, `stores.yml`) **on GitHub**,
-commit, and the running site picks it up within `GIT_SYNC_INTERVAL` seconds (default 60).
-No redeploy, no SSH, no restart. The web container re-runs `git fetch && git reset --hard
-origin/main` on a timer and reloads the YAML when the files change.
+Same deploy pattern as **thvjq.com.au**: the container fetches and hard-resets the
+checkout, and a GitHub push webhook makes it instant.
 
-- Impatient? **Status → Pull config from git now**.
+Edit `config/devices.yml` (or `parts.yml`, `settings.yml`, `stores.yml`) **on GitHub**,
+commit, and the running site picks it up — within seconds via the webhook, or within
+`GIT_SYNC_INTERVAL` (default 120s) on the fallback poll if you skip it.
+
+**Webhook setup** — repo → Settings → Webhooks → Add webhook:
+
+| Field | Value |
+|---|---|
+| Payload URL | `https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing` |
+| Content type | `application/json` |
+| Secret | the same string as `WEBHOOK_SECRET` |
+| Events | just the push event |
+
+GitHub pings it immediately — expect a green ✔ with `pong`. Unlike thvjq.com.au this
+needs **no second hostname**: the app serves its own hook on the site's domain, and an
+unsigned request is rejected with 401.
+
+- Impatient, or no webhook? **Status → Pull config from git now**.
 - Broke the YAML? The site keeps serving the last good copy and shows a red banner with
   the parse error instead of falling over.
 - ⚠ The checkout the container watches is a **mirror of `origin/main`** — it hard-resets.
@@ -53,18 +68,22 @@ App code changes still need a rebuild: `git pull && docker compose up -d --build
 
 ### TrueNAS SCALE (Willard) — the real deployment
 
-Use [`deploy/truenas-scale.yaml`](deploy/truenas-scale.yaml). It uses prebuilt ghcr.io
-images because the TrueNAS Custom App installer cannot build.
+Use [`deploy/truenas-scale.yaml`](deploy/truenas-scale.yaml) — same shape as the
+THVjQ-Website app: named volumes, no host paths, no build step (the Custom App installer
+can't build), one port behind the tunnel.
 
-1. **Datasets** → create `parts-price-puller`, and under it `repo` and `data`.
-   Back up `data` — it holds every price and every store calculator.
-2. **Apps → Discover Apps → ⋮ → Install via YAML** → paste the file.
-3. Edit every `⚠` line: pool name in the two volume paths, `SITE_PASSWORD`, `INGEST_KEY`
-   (the same value in both services), and the CrazyParts login.
-4. Install. First boot clones this repo into `/repo` by itself — nothing to copy up front.
-5. **Cloudflare** → point `pricing.sosphonerepairs.thvjq.com.au` at
-   `http://<truenas-ip>:8788`, same pattern as sosmessenger. Or uncomment the
-   `cloudflared` service and run it as a tunnel with no open port at all.
+1. **Apps → Discover Apps → ⋮ → Install via YAML** → paste the file.
+2. Edit every `⚠` line: `SITE_PASSWORD`, `INGEST_KEY` (same value in **both** services),
+   `WEBHOOK_SECRET`, and the CrazyParts login.
+3. Install. First boot clones this repo into the `ppp_repo` volume by itself — no
+   datasets to prepare, nothing to copy up front.
+4. **Cloudflare** → point `pricing.sosphonerepairs.thvjq.com.au` at
+   `http://<truenas-ip>:8788`.
+5. **GitHub webhook** → `https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing`
+   (see [Live config editing](#live-config-editing)).
+
+⚠ Back up the **`ppp_data`** volume — it holds every price, pin and store calculator, and
+none of it is recoverable from git.
 
 Updating: config YAML edits are live. For app updates, **Apps → parts-price-puller → ⋮ →
 Pull image → Restart** (GitHub Actions rebuilds both images on every push to `main`).
@@ -88,9 +107,12 @@ git pull && docker compose up -d --build
 
 ## Using the site
 
-**Login** — one shared staff password (`SITE_PASSWORD`). Wholesale pricing is never
-public. If you'd rather use Cloudflare Access, set `AUTH_MODE=cf-access` and let Access
-do the auth in front.
+**Login** — one shared account: **`SOSPhonerepairs`** / `SITE_PASSWORD` (the username is
+matched case-insensitively). It's a deterrent, not real security, so keep the site off
+the public internet or put Cloudflare Access in front with `AUTH_MODE=cf-access`.
+
+Your store, grade and view are remembered **on the server**, not in the browser — sign in
+on a different device and the site comes back the way you left it.
 
 | Control | What it does |
 |---|---|
@@ -101,27 +123,53 @@ do the auth in front.
 | **Calculator** | This store's markup, labour, GST and rounding — with a live preview |
 | **Status** | Config/git health, counts, recent activity, force a config pull |
 
-Click any cell for its source, matched product title, product link, timestamp, what the
-other supplier quoted, and the change since the last pull. Cells tint **green** when the
-price dropped and **red** when it rose; an amber dot means the cell is pinned; a red bar
-means the price was entered by hand and no pull will overwrite it.
+**Left-click** any cell for its source, matched product title, product link, timestamp,
+which rule priced it, what the other supplier quoted, and the change since the last pull.
+Cells tint **green** when the price dropped and **red** when it rose; an amber dot means
+the cell is pinned; a red bar means the price was entered by hand.
 
 Bookmarkable: `?store=lismore&view=both&grade=AMP&q=iphone%2013` — handy for sending a
 store straight to their own retail column. Add `#calc` to open the calculator too.
 
+### Manual prices — right-click → Edit
+
+Right-click a cell, then click **✏ Edit price**. Two deliberate steps, so a price can
+never be nudged by a stray click. Type the cost, see the retail figure update live, Save.
+
+A manual price **outranks every supplier price and no pull will ever overwrite it** — the
+scraper and the userscript keep writing their own numbers underneath (you can still see
+them in the cell popover under "Also"), but the cell shows yours until you right-click →
+**↩ Clear manual price**, which drops it back to the live cheapest price.
+
 ### The calculator
 
 ```
-retail = round( wholesale × (1 + markup%) + labour )   [+ GST]
+retail = cost × ×%  +  $              …and over the threshold:
+retail = cost × then×%  +  then $
 ```
 
-`markup` is either flat or cost-tiered (cheap parts carry a much bigger multiplier than
-a $300 service pack — that's what the tier table is for). Rounding does nearest/up/down
-to any step, with an optional `.99` / `.95` ending.
+`×%` carries GST — **110 = cost +10% GST**, 130 = GST plus 20% on the part. `+ $` is the
+labour/fitting component. So "cost × 110% + $90, but over $250 it's cost × 110% + $150"
+is exactly four boxes.
+
+Rules are set **per part and per device family** — LCD, OLED, Battery, Charging Port …
+each priced differently for iPhone vs Samsung A vs Samsung S (add `google` to
+`devices.yml` and a Google tab appears on its own). Blank boxes **inherit**, so you set
+the base rule once and only override what differs:
+
+```
+*|*            base — every part, every device
+iphone|*       every iPhone part
+*|LCD          LCD everywhere
+iphone|LCD     iPhone LCD — wins
+```
+
+The greyed number in an empty box is what it's inheriting; type over it to override, clear
+it to inherit again. The right-hand column shows what a $60 part would sell for, live.
 
 Seeds come from `config/stores.yml`; the moment you press **Save**, that store's
-calculator belongs to the database and git stops touching it. **Reset to git defaults**
-hands it back.
+calculator belongs to the database and git stops touching it — and it follows your login
+to any device. **Reset to git defaults** hands it back.
 
 ---
 
@@ -198,7 +246,10 @@ Machine callers authenticate with `X-Key: <INGEST_KEY>`; browsers use the sessio
 | `GET /api/config` | key or session | Devices, parts, queries, pins, schedule — for the scraper/TM |
 | `GET/POST/DELETE /api/pins` | key or session | Setup Mode pins |
 | `GET /api/stores`, `PUT/DELETE /api/stores/:id/calculator` | session (writes) | Per-store calculators |
-| `POST /api/git/pull` | key or session | Pull config from git right now (webhook-friendly) |
+| `POST /api/manual` | session | Set/clear a hand-entered price (`price: null` clears) |
+| `GET/PUT /api/prefs` | session | Remembered store / grade / view |
+| `POST /hooks/pricing` | HMAC signature | GitHub push webhook → instant config deploy |
+| `POST /api/git/pull` | key or session | Pull config from git right now |
 | `GET /api/status`, `GET /api/logs` | session | Health, git state, activity |
 | `GET /api/health` | none | Liveness only — no data |
 
@@ -206,9 +257,9 @@ Machine callers authenticate with `X-Key: <INGEST_KEY>`; browsers use the sessio
 
 ## Notes and limits
 
-- **The Parts Home** is listed in `settings.yml` but has **no scraper yet** (`enabled:
-  false`). The matrix already picks the cheapest across sources, so when a TPH scraper
-  lands it just starts appearing. Prices imported or pushed under `TPH` display today.
+- **The Parts Home is parked.** Its entry in `config/settings.yml` is commented out and
+  no TPH code ships. The matrix still picks the cheapest across whatever sources are
+  enabled, so bringing it back later is one uncommented line plus a scraper.
 - `CP_SEARCH_ACTION` in both scrapers is tied to CrazyParts' current frontend build and
   changes when they redeploy. Symptom: everything comes back `NO MATCH`. Fix: DevTools →
   Network → the search POST to `/` → copy the `Next-Action` header into the `EDIT ME`

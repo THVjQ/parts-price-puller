@@ -1,59 +1,68 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# TrueNAS SCALE — Custom App YAML   (Electric Eel 24.10+ / Fangtooth 25.04+, Docker)
+# =====================================================================
+#  Parts Price Puller — TrueNAS SCALE stack
+#  Paste into TrueNAS: Apps -> Discover Apps -> (top-right) -> "Install via YAML".
+#  Same shape as the THVjQ-Website app: named volumes, no host paths, no build,
+#  one port behind a Cloudflare tunnel.
+# ---------------------------------------------------------------------
+#  Site   : http://<truenas-ip>:8788
+#  Webhook: http://<truenas-ip>:8788/hooks/pricing
+#  Point the Cloudflare tunnel  pricing.sosphonerepairs.thvjq.com.au -> <truenas-ip>:8788
 #
-# INSTALL
-#   1. Datasets → create, under your apps dataset:
-#          parts-price-puller
-#          parts-price-puller/repo     ← the git checkout (config/*.yml lives here)
-#          parts-price-puller/data     ← prices.db + store calculators. BACK THIS UP.
-#   2. Apps → Discover Apps → ⋮ (top right) → Install via YAML
-#   3. Paste this file, then edit every ⚠ line below.
-#   4. Install. First boot clones the repo into /repo itself — nothing to pre-copy.
-#   5. Cloudflare: point pricing.sosphonerepairs.thvjq.com.au at
-#      http://<truenas-ip>:8788 (tunnel ingress, or a proxied A record + origin rule).
+#  EDIT THESE:
+#   - SITE_PASSWORD    -> staff login password (username is SOSPhonerepairs)
+#   - INGEST_KEY       -> openssl rand -hex 32   (same value in BOTH services)
+#   - WEBHOOK_SECRET   -> openssl rand -hex 32   (also into the GitHub webhook)
+#   - CP_USER/CP_PASS  -> the CrazyParts wholesale login
 #
-# UPDATING
-#   • config/*.yml edits on GitHub  → live within GIT_SYNC_INTERVAL. Nothing to do.
-#   • app code changes              → Apps → parts-price-puller → ⋮ → Pull image, then
-#                                     Restart. (Images are built by GitHub Actions on
-#                                     every push to main.)
+#  LIVE CONFIG: the web container fetch+resets this repo into the ppp_repo volume
+#  every GIT_SYNC_INTERVAL seconds and hot-reloads config/*.yml. Add the GitHub
+#  webhook below and a push is live in seconds instead:
+#    repo -> Settings -> Webhooks -> Add webhook
+#      Payload URL : https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing
+#      Content type: application/json
+#      Secret      : the same WEBHOOK_SECRET
+#      Events      : just the push event      (GitHub pings it -> expect 200 "pong")
 #
-# ⚠ TrueNAS cannot build images, so this file uses the prebuilt ghcr.io ones. The
-#   root docker-compose.yml is the build-from-source version for a plain Docker host.
-# ═══════════════════════════════════════════════════════════════════════════════
-
+#  UPDATING THE APP ITSELF (not config): Apps -> parts-price-puller -> ⋮ ->
+#  Pull image -> Restart. GitHub Actions rebuilds both images on every push to main.
+#
+#  ⚠ BACK UP the ppp_data volume — it holds every price, pin and store calculator.
+#    Nothing in it is recoverable from git.
+# =====================================================================
 services:
   web:
     image: ghcr.io/thvjq/parts-price-puller-web:latest
     container_name: ppp-web
     restart: unless-stopped
     ports:
-      - "8788:8080"                       # ⚠ host port → Cloudflare points here
+      - "8788:8080"
     environment:
       TZ: Australia/Sydney
 
-      # ── auth ────────────────────────────────────────────────────────────
+      # ── staff login ─────────────────────────────────────────────────────
       AUTH_MODE: password                 # password | cf-access | none
-      SITE_PASSWORD: "⚠ CHANGE ME — long shared staff password"
-      SECURE_COOKIE: "1"                  # 0 only if the site is reached over plain http
+      SITE_USER: "SOSPhonerepairs"
+      SITE_PASSWORD: "1234"               # ⬅ EDIT — a deterrent, not a secret
+      SECURE_COOKIE: "1"                  # 0 only if reached over plain http
 
-      # ── shared key for the scraper + Tampermonkey (openssl rand -hex 32) ─
-      INGEST_KEY: "⚠ CHANGE ME — long random string"
+      # ── machine callers: scraper + Tampermonkey ─────────────────────────
+      INGEST_KEY: "⚠ CHANGE ME — openssl rand -hex 32"
 
       # ── live config from git ────────────────────────────────────────────
       GIT_SYNC: "1"
-      GIT_SYNC_INTERVAL: "60"             # seconds between config pulls
+      GIT_SYNC_INTERVAL: "120"            # fallback poll; the webhook is instant
       GIT_REMOTE: "https://github.com/THVjQ/parts-price-puller.git"
       GIT_BRANCH: "main"
-      # GIT_TOKEN: ""                     # only if the repo is private
+      # GIT_TOKEN: ""                     # only if the repo goes private
+      WEBHOOK_SECRET: "⚠ CHANGE ME — openssl rand -hex 32"
 
       CONFIG_DIR: /repo/config
       REPO_DIR: /repo
       DATA_DIR: /app/data
       PORT: "8080"
     volumes:
-      - /mnt/POOL/apps/parts-price-puller/repo:/repo          # ⚠ set POOL
-      - /mnt/POOL/apps/parts-price-puller/data:/app/data      # ⚠ set POOL — back this up
+      - ppp_repo:/repo                    # the checkout — cloned on first boot
+      - ppp_data:/app/data                # prices.db — BACK THIS UP
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -83,15 +92,6 @@ services:
     # Playwright needs more than the default 64MB of /dev/shm for Chromium.
     shm_size: "1gb"
 
-  # ── OPTIONAL: publish via Cloudflare Tunnel instead of opening port 8788 ──────
-  # Delete the `ports:` block on `web` if you use this. Create the tunnel in the
-  # Cloudflare dashboard with a public hostname of
-  # pricing.sosphonerepairs.thvjq.com.au → service http://web:8080, then paste its token.
-  #
-  # cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   container_name: ppp-cloudflared
-  #   restart: unless-stopped
-  #   command: tunnel --no-autoupdate run --token ⚠ TUNNEL_TOKEN
-  #   depends_on:
-  #     - web
+volumes:
+  ppp_repo:
+  ppp_data:

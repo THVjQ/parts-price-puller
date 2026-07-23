@@ -93,6 +93,12 @@ parts:
     must: [front camera]
     exclude: [lens, rear, back camera, *accessories]
 
+  - key: CHARGE_PORT
+    label: Charging Port
+    query: "{device} charging port"
+    must: [charging port, charge port, dock connector, charging flex]
+    exclude: [screen, lcd, oled, battery, camera, *accessories]
+
   - key: BACK_GLASS
     label: Back Glass
     query: "{device} back glass"

@@ -8,6 +8,7 @@
  *   data/prices.db (volume, never git)  — prices, pins, per-store calculator edits
  */
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 
 const config = require('./lib/config');
@@ -28,7 +29,8 @@ if (!INGEST_KEY) {
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', process.env.TRUST_PROXY || 1);   // Cloudflare / reverse proxy
-app.use(express.json({ limit: '4mb' }));
+// Keep the raw body: the GitHub webhook signature is an HMAC over the exact bytes.
+app.use(express.json({ limit: '4mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // ───────────────────────────────────────────────────────── helpers
 const clean = s => String(s == null ? '' : s).trim();
@@ -80,9 +82,10 @@ app.post('/api/login', (req, res) => {
   if (auth.MODE !== 'password') return res.json({ ok: true, note: 'auth mode ' + auth.MODE });
   const ip = req.ip || 'unknown';
   if (auth.tooManyAttempts(ip)) return res.status(429).json({ error: 'Too many attempts — wait 15 minutes.' });
-  const ok = auth.checkPassword((req.body || {}).password);
+  const b = req.body || {};
+  const ok = auth.checkLogin(b.username, b.password);
   auth.noteAttempt(ip, ok);
-  if (!ok) return res.status(401).json({ error: 'Wrong password.' });
+  if (!ok) return res.status(401).json({ error: 'Wrong username or password.' });
   auth.setSession(res);
   db.log('web', '', 'Login from ' + ip);
   res.json({ ok: true });
@@ -93,6 +96,35 @@ app.post('/api/logout', (req, res) => { auth.clearSession(res); res.json({ ok: t
 app.get('/login', (req, res) => {
   if (auth.isLoggedIn(req)) return res.redirect('/');
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// ───────────────────────────────────────────────────────── GitHub webhook
+// Same deal as the THVjQ-Website deployer: point a GitHub push webhook here and a
+// commit to config/*.yml is live in seconds instead of waiting for the poll.
+//   Payload URL:  https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing
+//   Content type: application/json     Secret: WEBHOOK_SECRET     Event: push
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+
+function validSignature(req) {
+  if (!WEBHOOK_SECRET) return true;                     // unset = accept (not recommended)
+  const sig = req.get('X-Hub-Signature-256') || '';
+  const want = 'sha256=' + crypto.createHmac('sha256', WEBHOOK_SECRET).update(req.rawBody || Buffer.alloc(0)).digest('hex');
+  return sig.length === want.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want));
+}
+
+app.get('/hooks/pricing', (req, res) => res.type('text').send('ok'));
+
+app.post('/hooks/pricing', async (req, res) => {
+  if (!validSignature(req)) return res.status(401).type('text').send('bad signature');
+  const event = req.get('X-GitHub-Event') || '';
+  if (event === 'ping') return res.type('text').send('pong');
+  if (event !== 'push') return res.type('text').send('ignored event: ' + event);
+
+  const r = await gitsync.pull();
+  config.invalidate();
+  config.get();
+  db.log('system', '', `Webhook deploy: ${r.ok ? 'ok @ ' + r.head + ' — ' + r.message : 'FAILED — ' + r.message}`);
+  res.status(r.ok ? 200 : 500).type('text').send(r.ok ? 'deployed ' + r.head : 'deploy failed');
 });
 
 // ───────────────────────────────────────────────────────── machine endpoints (X-Key)
@@ -224,6 +256,54 @@ app.delete('/api/pins', requireKeyOrSession, (req, res) => {
   res.json({ ok: true, removed: n });
 });
 
+// ───────────────────────────────────────────────────────── manual prices
+/**
+ * A price a human typed in (right-click a cell → Edit). Stored as its own source, and
+ * the matrix always prefers it over anything a supplier quoted — so a pull can never
+ * bump it. Sending price: null clears it and the cell falls back to the live price.
+ */
+app.post('/api/manual', requireSession, (req, res) => {
+  const cfg = config.get();
+  const b = req.body || {};
+  const device = deviceIndex.get(clean(b.device).toLowerCase());
+  const part = partIndex.get(clean(b.part).toUpperCase());
+  if (!device || !part) return res.status(400).json({ error: 'unknown device or part' });
+
+  const grade = gradeFor(part.key, b.grade, cfg);
+  const raw = b.price === '' || b.price == null ? null : Number(b.price);
+  const price = Number.isFinite(raw) && raw > 0 ? raw : null;
+
+  db.insertPrices([{
+    device: device.name, part: part.key, grade, source: 'MANUAL',
+    price,
+    url: '',
+    // A tombstone row (price null) is how "clear" works: history stays intact and the
+    // cell drops back to the cheapest supplier price on the next read.
+    matched_title: price == null ? 'Manual price cleared' : clean(b.note) || 'Entered by hand',
+    ts: nowIso(),
+  }]);
+  db.log('web', 'MANUAL', `${price == null ? 'Cleared' : 'Set'} ${device.name} / ${part.key}${grade ? ' [' + grade + ']' : ''}${price == null ? '' : ' = ' + price}`);
+  res.json({ ok: true, price });
+});
+
+// ───────────────────────────────────────────────────────── prefs
+// One shared login, so "which store am I" belongs on the server — log in anywhere and
+// the site comes back the way you left it.
+app.get('/api/prefs', requireSession, (req, res) => {
+  res.json({ prefs: db.getPref('ui', {}) });
+});
+
+app.put('/api/prefs', requireSession, (req, res) => {
+  const b = req.body || {};
+  const prefs = {
+    store: clean(b.store).slice(0, 60),
+    grade: clean(b.grade).slice(0, 30),
+    view: ['wholesale', 'retail', 'both'].includes(b.view) ? b.view : 'wholesale',
+  };
+  db.setPref('ui', prefs);
+  res.json({ ok: true, prefs });
+});
+
 // ───────────────────────────────────────────────────────── stores
 function storeOut(row) {
   let calculator;
@@ -309,7 +389,7 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
     for (const row of rows) {
       for (const key of Object.keys(row.cells)) {
         const cell = row.cells[key];
-        cell.retail = cell.price == null ? null : calc.computeRetail(cell.price, c, cfg.site.gstPercent);
+        cell.retail = cell.price == null ? null : calc.computeRetail(cell.price, c, row.group, key);
       }
     }
   }
@@ -344,6 +424,7 @@ app.get('/api/status', requireSession, (req, res) => {
     auth: auth.MODE,
     config: config.status(),
     git: gitsync.status(),
+    webhook: Boolean(WEBHOOK_SECRET),
     counts: { devices: cfg.devices.length, parts: cfg.parts.length, stores: db.listStores().length, prices: db.priceCount(), pins: db.listPins().length },
     schedule: cfg.schedule,
     updated: db.lastUpdated(),

@@ -85,44 +85,44 @@
 <div id="pop" class="pop" hidden></div>
 
 <!-- calculator drawer -->
-<aside id="drawer" class="drawer" hidden>
+<aside id="drawer" class="drawer wide" hidden>
   <div class="drawer-hd">
     <strong id="drawerTitle">Calculator</strong>
     <button class="x" id="drawerClose" aria-label="Close">✕</button>
   </div>
   <div class="drawer-bd">
+    <p class="formula">
+      retail = <b>cost × ×%</b> + <b>$</b> &nbsp;·&nbsp; over the threshold: <b>cost × then×%</b> + <b>then $</b>
+      <br><span class="hint">×% includes GST — 110 = cost +10% GST. Blank fields inherit from the row above.</span>
+    </p>
     <p class="hint" id="drawerHint"></p>
 
     <fieldset>
-      <legend>Markup</legend>
-      <div class="seg wide" id="modeSeg">
-        <button data-mode="flat">Flat %</button>
-        <button data-mode="tiers">Cost tiers</button>
-      </div>
-
-      <label class="row" id="flatRow">
-        <span>Markup %</span>
-        <input type="number" id="markupPercent" step="1" min="0">
-      </label>
-
-      <div id="tiersBox">
-        <table class="tiers">
-          <thead><tr><th>Cost up to</th><th>Markup %</th><th></th></tr></thead>
-          <tbody id="tiersBody"></tbody>
-        </table>
-        <button class="btn ghost small" id="addTier">+ Add tier</button>
-        <p class="hint">First matching row wins. Leave the last “cost up to” blank for “and everything above”.</p>
-      </div>
+      <legend>Device family</legend>
+      <div class="seg wide" id="groupSeg"></div>
     </fieldset>
 
     <fieldset>
-      <legend>Then</legend>
-      <label class="row"><span>Labour / fitting $</span><input type="number" id="labour" step="1" min="0"></label>
-      <label class="row check"><input type="checkbox" id="gst"><span>Add GST to retail</span></label>
+      <legend>Rules</legend>
+      <table class="rules">
+        <thead>
+          <tr>
+            <th>Part</th>
+            <th title="cost is multiplied by this — includes GST">×%</th>
+            <th title="added after the multiply — labour/fitting">+ $</th>
+            <th title="costs above this use the two columns to the right">over $</th>
+            <th title="multiplier used above the threshold">then ×%</th>
+            <th title="amount added above the threshold">then + $</th>
+            <th title="what a $60 part would sell for">$60 →</th>
+          </tr>
+        </thead>
+        <tbody id="rulesBody"></tbody>
+      </table>
+      <p class="hint" id="inheritNote"></p>
     </fieldset>
 
     <fieldset>
-      <legend>Rounding</legend>
+      <legend>Rounding (applies to every rule)</legend>
       <label class="row">
         <span>Mode</span>
         <select id="roundMode">
@@ -145,16 +145,19 @@
     </fieldset>
 
     <fieldset>
-      <legend>Preview</legend>
-      <table class="preview"><thead><tr><th>Wholesale</th><th>Retail</th><th>Margin</th></tr></thead>
+      <legend>Preview — <span id="previewGroup"></span></legend>
+      <table class="preview"><thead><tr><th>Part</th><th>$25</th><th>$60</th><th>$150</th><th>$400</th></tr></thead>
         <tbody id="previewBody"></tbody></table>
     </fieldset>
   </div>
   <div class="drawer-ft">
-    <button class="btn ghost" id="resetCalc" title="Discard local edits and use config/stores.yml again">Reset to git defaults</button>
+    <button class="btn ghost" id="resetCalc" title="Discard saved edits and use config/stores.yml again">Reset to git defaults</button>
     <button class="btn" id="saveCalc">Save</button>
   </div>
 </aside>
+
+<!-- right-click cell menu / manual price editor -->
+<div id="menu" class="menu" hidden></div>
 
 <!-- status drawer -->
 <aside id="statusDrawer" class="drawer" hidden>

@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS stores (
   updated_at      TEXT NOT NULL
 );
 
+-- UI preferences, server-side on purpose: there is one shared login, so the store /
+-- grade / view you picked should follow you onto any other device.
+CREATE TABLE IF NOT EXISTS prefs (
+  k          TEXT PRIMARY KEY,
+  v          TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS logs (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   ts      TEXT NOT NULL,
@@ -164,6 +172,13 @@ const seedStores = db.transaction(seeds => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────── prefs
+const getPrefStmt = db.prepare(`SELECT v FROM prefs WHERE k = ?`);
+const setPrefStmt = db.prepare(`
+  INSERT INTO prefs (k, v, updated_at) VALUES (?, ?, ?)
+  ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at
+`);
+
 // ─────────────────────────────────────────────────────────────── logs
 const insertLogStmt = db.prepare(`INSERT INTO logs (ts, origin, source, message) VALUES (?, ?, ?, ?)`);
 const listLogsStmt  = db.prepare(`SELECT * FROM logs ORDER BY id DESC LIMIT ?`);
@@ -188,6 +203,8 @@ module.exports = {
   getStore: id => getStoreStmt.get(id),
   saveCalculator: (id, calc) => saveCalcStmt.run(JSON.stringify(calc), nowIso(), id).changes,
   resetCalculator: id => resetCalcStmt.run(nowIso(), id).changes,
+  getPref: (k, fallback) => { const r = getPrefStmt.get(k); try { return r ? JSON.parse(r.v) : fallback; } catch (e) { return fallback; } },
+  setPref: (k, v) => setPrefStmt.run(k, JSON.stringify(v), nowIso()),
   log,
   listLogs: n => listLogsStmt.all(n || 200),
   pruneLogs: n => pruneLogsStmt.run(n || 2000).changes,

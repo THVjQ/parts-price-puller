@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const YAML = require('yaml');
+const calc = require('../public/calc.js');   // shared rule shape — see cleanRule()
 
 const CONFIG_DIR = process.env.CONFIG_DIR || '/config';
 const FILES = ['devices.yml', 'parts.yml', 'stores.yml', 'settings.yml'];
@@ -129,22 +130,25 @@ function build() {
 
 function num(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 
-// Accept a partly-filled calculator and return a complete, valid one.
+// Accept a partly-filled calculator (from YAML or from the editor) and return a
+// complete, valid one. Unknown keys are dropped, so a hand-edited stores.yml can
+// never inject junk into the DB.
 function normaliseCalculator(c) {
   c = c && typeof c === 'object' ? c : {};
   const r = c.rounding && typeof c.rounding === 'object' ? c.rounding : {};
-  const tiers = (Array.isArray(c.tiers) ? c.tiers : [])
-    .filter(t => t && t.markupPercent != null)
-    .map(t => ({
-      upTo: t.upTo == null || t.upTo === '' ? null : num(t.upTo, null),
-      markupPercent: num(t.markupPercent, 0),
-    }));
+
+  const rules = {};
+  const src = c.rules && typeof c.rules === 'object' ? c.rules : {};
+  for (const key of Object.keys(src)) {
+    if (!/^[a-z0-9*-]+\|[A-Z_*0-9]+$/i.test(key)) continue;    // "group|PART" only
+    const rule = calc.cleanRule(src[key]);
+    if (Object.keys(rule).length) rules[key] = rule;
+  }
+  // Always have a base rule, so an empty calculator still prices something sane.
+  if (!rules['*|*']) rules['*|*'] = { multiplyPercent: 110, add: 0 };
+
   return {
-    mode: c.mode === 'flat' ? 'flat' : (tiers.length ? 'tiers' : 'flat'),
-    markupPercent: num(c.markupPercent, 60),
-    tiers: tiers.length ? tiers : [{ upTo: null, markupPercent: num(c.markupPercent, 60) }],
-    labour: num(c.labour, 0),
-    gst: c.gst !== false,
+    rules,
     rounding: {
       mode: ['none', 'nearest', 'up', 'down'].includes(r.mode) ? r.mode : 'none',
       step: num(r.step, 5) > 0 ? num(r.step, 5) : 5,

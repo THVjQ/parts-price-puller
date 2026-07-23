@@ -1,7 +1,10 @@
 /* Parts Price Puller — front end.
    Wholesale comes from the server; RETAIL is computed in the browser with the same
-   calc.js the server uses, so switching store or dragging a markup slider repaints
-   instantly without a round trip. */
+   calc.js the server uses, so switching store or editing a rule repaints instantly
+   without a round trip.
+
+   Store / grade / view are remembered SERVER-SIDE (one shared login), so signing in
+   on another device brings back the same view. */
 (function () {
   'use strict';
 
@@ -14,9 +17,9 @@
   const state = {
     data: null,
     stores: [],
-    storeId: qs.get('store') || localStorage.getItem('ppp.store') || '',
-    view: qs.get('view') || localStorage.getItem('ppp.view') || 'wholesale',
-    grade: qs.get('grade') || localStorage.getItem('ppp.grade') || '',
+    storeId: qs.get('store') || '',
+    view: qs.get('view') || 'wholesale',
+    grade: qs.get('grade') || '',
     filter: qs.get('q') || '',
     currency: '$',
     gstPercent: 10,
@@ -48,6 +51,14 @@
     const json = await res.json().catch(() => ({ error: 'bad response' }));
     if (!res.ok) throw new Error(json.error || res.statusText);
     return json;
+  }
+
+  let prefsTimer = null;
+  function savePrefs() {
+    clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(() => {
+      api('PUT', '/api/prefs', { store: state.storeId, grade: state.grade, view: state.view }).catch(() => {});
+    }, 400);
   }
 
   // ───────────────────────────────────────────── load + render
@@ -85,19 +96,22 @@
     render();
   }
 
+  const retailFor = (price, group, part) => {
+    const s = store();
+    return s ? PPPCalc.computeRetail(price, s.calculator, group, part) : null;
+  };
+
   function render() {
     const d = state.data;
     if (!d) return;
 
-    // header
     const head = $('#headRow');
     head.innerHTML = '';
     head.appendChild(Object.assign(el('th', 'devcol', 'Device'), { scope: 'col' }));
     d.parts.forEach(p => head.appendChild(Object.assign(el('th', null, p.label), { scope: 'col' })));
 
     const groups = new Map(d.groups.map(g => [g.id, g.label]));
-    const calcCfg = store() ? store().calculator : null;
-    const view = calcCfg ? state.view : 'wholesale';
+    const view = store() ? state.view : 'wholesale';
 
     const body = document.createDocumentFragment();
     let lastGroup = null;
@@ -121,13 +135,14 @@
         const td = el('td', 'cell');
         td.dataset.device = row.device;
         td.dataset.part = p.key;
+        td.dataset.group = row.group;
 
         if (c.price == null) {
           td.classList.add('empty');
           td.textContent = c.ts ? '—' : '';
           if (c.ts) td.dataset.miss = '1';
         } else {
-          const retail = calcCfg ? PPPCalc.computeRetail(c.price, calcCfg, state.gstPercent) : null;
+          const retail = retailFor(c.price, row.group, p.key);
           if (c.prev != null && c.prev !== c.price) td.classList.add(c.price > c.prev ? 'up' : 'down');
           if (c.manual) td.classList.add('manual');
           if (c.pinned) td.classList.add('pinned');
@@ -184,21 +199,25 @@
     $('#calcBtn').title = has ? 'Edit this store’s calculator' : 'Pick a store first';
   }
 
-  // ───────────────────────────────────────────── cell popover
+  // ───────────────────────────────────────────── cell popover (left click)
   const pop = $('#pop');
   function closePop() { pop.hidden = true; }
 
-  async function openPop(td) {
+  const cellOf = td => {
+    const row = state.data.rows.find(r => r.device === td.dataset.device);
+    return row ? row.cells[td.dataset.part] : null;
+  };
+
+  function openPop(td) {
     const d = state.data;
-    const row = d.rows.find(r => r.device === td.dataset.device);
-    if (!row) return;
-    const c = row.cells[td.dataset.part];
+    const c = cellOf(td);
+    if (!c) return;
     const part = d.parts.find(p => p.key === td.dataset.part);
-    const calcCfg = store() ? store().calculator : null;
+    const s = store();
 
     pop.innerHTML = '';
     pop.appendChild(Object.assign(el('button', 'close', '✕'), { onclick: closePop }));
-    pop.appendChild(el('h4', null, row.device + ' — ' + part.label));
+    pop.appendChild(el('h4', null, td.dataset.device + ' — ' + part.label));
 
     const dl = el('dl');
     const add = (k, v, isNode) => { dl.appendChild(el('dt', null, k)); const dd = el('dd'); if (isNode) dd.appendChild(v); else dd.textContent = v; dl.appendChild(dd); };
@@ -207,21 +226,23 @@
       add('Status', c.ts ? 'No match on the last pull' : 'Never pulled');
       if (c.title) add('Query', c.title);
     } else {
-      add('Wholesale', money(c.price) + ' ex GST');
-      if (calcCfg) {
-        const retail = PPPCalc.computeRetail(c.price, calcCfg, state.gstPercent);
-        const margin = PPPCalc.marginPercent(c.price, retail, calcCfg, state.gstPercent);
-        add('Retail (' + store().name + ')', money(retail) + (margin != null ? '  ·  ' + margin + '% margin' : ''));
+      add(c.manual ? 'Manual price' : 'Wholesale', money(c.price) + ' ex GST');
+      if (s) {
+        const retail = retailFor(c.price, td.dataset.group, part.key);
+        const margin = PPPCalc.marginPercent(c.price, retail, state.gstPercent);
+        add('Retail (' + s.name + ')', money(retail) + (margin != null ? '  ·  ' + margin + '% margin' : ''));
+        const rule = PPPCalc.resolveRule(s.calculator, td.dataset.group, part.key);
+        add('Rule', PPPCalc.describeRule(rule, state.currency));
       }
       if (c.prev != null && c.prev !== c.price) {
         const diff = c.price - c.prev;
         add('Change', (diff > 0 ? '+' : '') + money(diff) + ' vs ' + money(c.prev));
       }
-      add('Source', (d.sources.find(s => s.key === c.source) || {}).label || c.source);
+      add('Source', c.manual ? 'Entered by hand — pulls never overwrite it'
+        : ((d.sources.find(x => x.key === c.source) || {}).label || c.source));
       if (c.alt && c.alt.length) add('Also', c.alt.map(a => a.source + ' ' + money(a.price)).join(', '));
-      if (c.manual) add('Note', 'Manually entered — pulls never overwrite it');
       if (c.pinned) add('Pin', 'Pinned to one exact product (Setup Mode)');
-      add('Pulled', ago(c.ts));
+      add(c.manual ? 'Set' : 'Pulled', ago(c.ts));
       if (c.url) {
         const a = el('a', null, 'Open product page');
         a.href = c.url; a.target = '_blank'; a.rel = 'noopener';
@@ -229,22 +250,132 @@
       }
     }
     pop.appendChild(dl);
-    if (c.title && c.price != null) pop.appendChild(el('p', 'title', c.title));
+    if (c.title && c.price != null && !c.manual) pop.appendChild(el('p', 'title', c.title));
+    pop.appendChild(el('p', 'title', 'Right-click for manual price'));
 
-    // position: prefer below-right of the cell, clamp into the viewport
-    pop.hidden = false;
+    place(pop, td);
+  }
+
+  // Position a floating panel near a cell, clamped into the viewport.
+  function place(node, td) {
+    node.hidden = false;
     const r = td.getBoundingClientRect();
-    const w = pop.offsetWidth, h = pop.offsetHeight;
-    let x = window.scrollX + Math.min(r.left, window.innerWidth - w - 12);
+    const w = node.offsetWidth, h = node.offsetHeight;
+    const x = window.scrollX + Math.min(r.left, window.innerWidth - w - 12);
     let y = window.scrollY + r.bottom + 6;
     if (r.bottom + h + 12 > window.innerHeight) y = window.scrollY + Math.max(8, r.top - h - 6);
-    pop.style.left = Math.max(8, x) + 'px';
-    pop.style.top = y + 'px';
+    node.style.left = Math.max(8, x) + 'px';
+    node.style.top = y + 'px';
+  }
+
+  // ───────────────────────────────────────────── right-click: manual price
+  // Two deliberate steps — right-click, then click Edit — so a price can never be
+  // nudged by a stray click. Saved manual prices outrank every supplier price and no
+  // pull will overwrite them.
+  const menu = $('#menu');
+  const closeMenu = () => { menu.hidden = true; };
+
+  // Clicking an item swaps the menu's contents (Edit → the price input), which detaches
+  // the clicked node. The click-away listener below would then see a target that is no
+  // longer inside #menu and close it. Stop menu clicks from reaching document at all.
+  menu.addEventListener('click', e => e.stopPropagation());
+
+  function openMenu(td) {
+    closePop();
+    const c = cellOf(td);
+    if (!c) return;
+    const part = state.data.parts.find(p => p.key === td.dataset.part);
+
+    menu.innerHTML = '';
+    menu.appendChild(el('div', 'menu-hd', td.dataset.device + ' — ' + part.label));
+
+    const item = (label, cls, fn) => {
+      const b = el('button', 'menu-item' + (cls ? ' ' + cls : ''), label);
+      b.onclick = fn;
+      menu.appendChild(b);
+      return b;
+    };
+
+    item(c.manual ? '✏ Edit manual price' : '✏ Edit price (set manually)', '', () => showEditor(td, c));
+    if (c.manual) {
+      item('↩ Clear manual price', 'danger', async () => {
+        await saveManual(td, null);
+      });
+    }
+    if (c.url) {
+      item('🔗 Open product page', '', () => { window.open(c.url, '_blank', 'noopener'); closeMenu(); });
+    }
+    item('✕ Cancel', 'muted', closeMenu);
+
+    place(menu, td);
+  }
+
+  function showEditor(td, c) {
+    const part = state.data.parts.find(p => p.key === td.dataset.part);
+    menu.innerHTML = '';
+    menu.appendChild(el('div', 'menu-hd', td.dataset.device + ' — ' + part.label));
+
+    const wrap = el('div', 'menu-edit');
+    const input = el('input');
+    input.type = 'number'; input.step = '0.01'; input.min = '0';
+    input.value = c.price == null ? '' : c.price;
+    input.placeholder = 'wholesale cost, ex GST';
+    wrap.appendChild(input);
+
+    const preview = el('div', 'menu-preview');
+    const updatePreview = () => {
+      const v = Number(input.value);
+      const s = store();
+      preview.textContent = !s
+        ? 'Pick a store to preview retail'
+        : (v > 0 ? 'Retail: ' + money(retailFor(v, td.dataset.group, part.key)) : '');
+    };
+    input.addEventListener('input', updatePreview);
+    updatePreview();
+    wrap.appendChild(preview);
+
+    const row = el('div', 'menu-actions');
+    const save = el('button', 'btn small', 'Save');
+    save.onclick = async () => {
+      const v = Number(input.value);
+      if (!(v > 0)) { preview.textContent = 'Enter a price above 0.'; return; }
+      save.disabled = true; save.textContent = 'Saving…';
+      await saveManual(td, v);
+    };
+    const cancel = el('button', 'btn ghost small', 'Cancel');
+    cancel.onclick = closeMenu;
+    row.append(save, cancel);
+    wrap.appendChild(row);
+    menu.appendChild(wrap);
+
+    place(menu, td);
+    input.focus();
+    input.select();
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); save.click(); }
+      if (ev.key === 'Escape') closeMenu();
+    });
+  }
+
+  async function saveManual(td, price) {
+    try {
+      await api('POST', '/api/manual', {
+        device: td.dataset.device,
+        part: td.dataset.part,
+        grade: state.grade,
+        price,
+      });
+      closeMenu();
+      await loadMatrix();
+    } catch (e) {
+      alert('Could not save: ' + e.message);
+    }
   }
 
   // ───────────────────────────────────────────── calculator drawer
   const drawer = $('#drawer'), scrim = $('#scrim'), statusDrawer = $('#statusDrawer');
-  let draft = null;
+  let draft = null;          // calculator being edited
+  let draftGroup = null;     // device group tab currently shown
 
   function openDrawer(node) { node.hidden = false; scrim.hidden = false; }
   function closeDrawers() { drawer.hidden = true; statusDrawer.hidden = true; scrim.hidden = true; }
@@ -253,76 +384,115 @@
     const s = store();
     if (!s) return;
     draft = JSON.parse(JSON.stringify(s.calculator));
+    draft.rules = draft.rules || {};
+    draftGroup = draftGroup || (state.data.groups[0] && state.data.groups[0].id) || '*';
     $('#drawerTitle').textContent = 'Calculator — ' + s.name;
     $('#drawerHint').textContent = s.edited
       ? 'Saved for this store on ' + new Date(s.updatedAt).toLocaleDateString() + '. Git deploys never touch it.'
       : 'Currently using the seed from config/stores.yml. Saving makes it this store’s own.';
-    fillForm();
-    openDrawer(drawer);
-  }
-
-  function fillForm() {
-    document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === draft.mode));
-    $('#flatRow').style.display = draft.mode === 'flat' ? '' : 'none';
-    $('#tiersBox').style.display = draft.mode === 'tiers' ? '' : 'none';
-    $('#markupPercent').value = draft.markupPercent;
-    $('#labour').value = draft.labour;
-    $('#gst').checked = Boolean(draft.gst);
     $('#roundMode').value = draft.rounding.mode;
     $('#roundStep').value = draft.rounding.step;
     $('#endsWith').value = draft.rounding.endsWith == null ? '' : String(draft.rounding.endsWith);
-    renderTiers();
+    renderGroupTabs();
+    renderRules();
+    openDrawer(drawer);
+  }
+
+  function renderGroupTabs() {
+    const seg = $('#groupSeg');
+    seg.innerHTML = '';
+    // "All devices" is the *|… level; each group tab writes group|… rules.
+    const tabs = [{ id: '*', label: 'All devices' }].concat(state.data.groups);
+    tabs.forEach(g => {
+      const b = el('button', g.id === draftGroup ? 'on' : null, g.label);
+      b.dataset.group = g.id;
+      b.onclick = () => { draftGroup = g.id; renderGroupTabs(); renderRules(); };
+      seg.appendChild(b);
+    });
+  }
+
+  const num = v => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
+
+  function renderRules() {
+    const tb = $('#rulesBody');
+    tb.innerHTML = '';
+    $('#previewGroup').textContent = draftGroup === '*' ? 'all devices' :
+      (state.data.groups.find(g => g.id === draftGroup) || {}).label || draftGroup;
+    $('#inheritNote').textContent = draftGroup === '*'
+      ? 'These apply to every device family unless that family overrides them below.'
+      : 'Blank = inherit from “All devices”. Fill a box to override it for this family only.';
+
+    // Rules are not per grade, so drop the "(BQ7)" suffix the matrix headers carry.
+    const plain = s => String(s).replace(/\s*\([^)]*\)\s*$/, '');
+    const rows = [{ key: '*', label: draftGroup === '*' ? 'All parts (base)' : 'All parts here' }]
+      .concat(state.data.parts.map(p => ({ key: p.key, label: plain(p.label) })));
+
+    rows.forEach(r => {
+      const ruleKey = PPPCalc.keyFor(draftGroup, r.key);
+      const rule = draft.rules[ruleKey] || {};
+      // What this cell resolves to WITHOUT its own values — shown as the placeholder,
+      // so an empty box visibly says "inheriting 110".
+      const parentSaved = draft.rules[ruleKey];
+      delete draft.rules[ruleKey];
+      const inherited = PPPCalc.resolveRule(draft, draftGroup, r.key);
+      if (parentSaved) draft.rules[ruleKey] = parentSaved;
+
+      const tr = el('tr', r.key === '*' ? 'baserule' : null);
+      tr.appendChild(el('td', null, r.label));
+
+      PPPCalc.FIELDS.forEach(f => {
+        const td = el('td');
+        const input = el('input');
+        input.type = 'number';
+        input.step = f === 'multiplyPercent' || f === 'overMultiplyPercent' ? '1' : '0.01';
+        input.min = '0';
+        input.value = rule[f] == null ? '' : rule[f];
+        input.placeholder = inherited[f] == null ? '—' : String(inherited[f]);
+        input.oninput = () => {
+          const v = num(input.value);
+          const cur = draft.rules[ruleKey] || {};
+          if (v == null) delete cur[f]; else cur[f] = v;
+          if (Object.keys(cur).length) draft.rules[ruleKey] = cur;
+          else delete draft.rules[ruleKey];
+          renderExample(tr, r.key);
+          renderPreview();
+        };
+        td.appendChild(input);
+        tr.appendChild(td);
+      });
+
+      tr.appendChild(el('td', 'example'));
+      tb.appendChild(tr);
+      renderExample(tr, r.key);
+    });
     renderPreview();
   }
 
-  function renderTiers() {
-    const tb = $('#tiersBody');
-    tb.innerHTML = '';
-    draft.tiers.forEach((t, i) => {
-      const tr = el('tr');
-      const c1 = el('td'), up = el('input');
-      up.type = 'number'; up.step = '1'; up.min = '0';
-      up.value = t.upTo == null ? '' : t.upTo;
-      up.placeholder = 'and above';
-      up.oninput = () => { t.upTo = up.value === '' ? null : Number(up.value); renderPreview(); };
-      c1.appendChild(up);
-
-      const c2 = el('td'), mk = el('input');
-      mk.type = 'number'; mk.step = '1'; mk.min = '0';
-      mk.value = t.markupPercent;
-      mk.oninput = () => { t.markupPercent = Number(mk.value); renderPreview(); };
-      c2.appendChild(mk);
-
-      const c3 = el('td'), del = el('button', 'del', '✕');
-      del.title = 'Remove tier';
-      del.onclick = () => { draft.tiers.splice(i, 1); renderTiers(); renderPreview(); };
-      c3.appendChild(del);
-
-      tr.append(c1, c2, c3);
-      tb.appendChild(tr);
-    });
+  function renderExample(tr, partKey) {
+    const cell = tr.querySelector('.example');
+    if (!cell) return;
+    cell.textContent = money(PPPCalc.computeRetail(60, draft, draftGroup, partKey === '*' ? '*' : partKey));
   }
 
   function renderPreview() {
     const tb = $('#previewBody');
     tb.innerHTML = '';
-    [15, 35, 75, 150, 320].forEach(w => {
-      const retail = PPPCalc.computeRetail(w, draft, state.gstPercent);
-      const margin = PPPCalc.marginPercent(w, retail, draft, state.gstPercent);
+    const costs = [25, 60, 150, 400];
+    const plain = s => String(s).replace(/\s*\([^)]*\)\s*$/, '');
+    const rows = [{ key: '*', label: 'Base' }].concat(state.data.parts.map(p => ({ key: p.key, label: plain(p.label) })));
+    rows.forEach(r => {
       const tr = el('tr');
-      tr.append(el('td', null, money(w)), el('td', null, money(retail)), el('td', null, margin == null ? '—' : margin + '%'));
+      tr.appendChild(el('td', null, r.label));
+      costs.forEach(c => tr.appendChild(el('td', null, money(PPPCalc.computeRetail(c, draft, draftGroup, r.key)))));
       tb.appendChild(tr);
     });
   }
 
-  function readForm() {
-    draft.markupPercent = Number($('#markupPercent').value) || 0;
-    draft.labour = Number($('#labour').value) || 0;
-    draft.gst = $('#gst').checked;
+  function readRounding() {
     draft.rounding.mode = $('#roundMode').value;
     draft.rounding.step = Number($('#roundStep').value) || 5;
     draft.rounding.endsWith = $('#endsWith').value === '' ? null : Number($('#endsWith').value);
-    renderPreview();
+    renderRules();
   }
 
   // ───────────────────────────────────────────── status drawer
@@ -346,6 +516,7 @@
       add('Git', s.git.enabled
         ? (s.git.ok === false ? 'FAILED: ' + s.git.message : (s.git.head || '?') + ' · ' + s.git.message + ' · every ' + s.git.intervalSec + 's')
         : 'sync disabled', s.git.ok === false ? 'bad' : null);
+      add('Webhook', s.webhook ? 'signed — POST /hooks/pricing' : 'unsigned (set WEBHOOK_SECRET)');
     } catch (e) {
       box.textContent = 'Status unavailable: ' + e.message;
     }
@@ -383,15 +554,15 @@
   // ───────────────────────────────────────────── wiring
   $('#storeSel').onchange = e => {
     state.storeId = e.target.value;
-    localStorage.setItem('ppp.store', state.storeId);
     if (state.storeId && state.view === 'wholesale') state.view = 'both';
     reflectViewAvailability();
     render();
+    savePrefs();
   };
 
   $('#gradeSel').onchange = e => {
     state.grade = e.target.value;
-    localStorage.setItem('ppp.grade', state.grade);
+    savePrefs();
     loadMatrix().catch(err => alert(err.message));
   };
 
@@ -399,21 +570,33 @@
     const b = e.target.closest('button');
     if (!b || b.disabled) return;
     state.view = b.dataset.view;
-    localStorage.setItem('ppp.view', state.view);
     reflectViewAvailability();
     render();
+    savePrefs();
   };
 
   $('#search').oninput = e => { state.filter = e.target.value; applyFilter(); };
 
   $('#body').onclick = e => {
     const td = e.target.closest('td.cell');
-    if (!td || td.classList.contains('empty') && !td.dataset.miss) return closePop();
+    closeMenu();
+    if (!td || (td.classList.contains('empty') && !td.dataset.miss)) return closePop();
     openPop(td);
     e.stopPropagation();
   };
-  document.addEventListener('click', e => { if (!pop.hidden && !pop.contains(e.target)) closePop(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); closeDrawers(); } });
+
+  $('#body').oncontextmenu = e => {
+    const td = e.target.closest('td.cell');
+    if (!td) return;
+    e.preventDefault();
+    openMenu(td);
+  };
+
+  document.addEventListener('click', e => {
+    if (!pop.hidden && !pop.contains(e.target)) closePop();
+    if (!menu.hidden && !menu.contains(e.target)) closeMenu();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); closeMenu(); closeDrawers(); } });
 
   $('#calcBtn').onclick = openCalc;
   $('#statusBtn').onclick = openStatus;
@@ -421,20 +604,13 @@
   $('#statusClose').onclick = closeDrawers;
   scrim.onclick = closeDrawers;
 
-  $('#modeSeg').onclick = e => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    draft.mode = b.dataset.mode;
-    fillForm();
-  };
-  $('#addTier').onclick = () => { draft.tiers.push({ upTo: null, markupPercent: draft.markupPercent }); renderTiers(); renderPreview(); };
-  ['#markupPercent', '#labour', '#gst', '#roundMode', '#roundStep', '#endsWith'].forEach(sel => {
-    $(sel).addEventListener('input', readForm);
-    $(sel).addEventListener('change', readForm);
+  ['#roundMode', '#roundStep', '#endsWith'].forEach(sel => {
+    $(sel).addEventListener('change', readRounding);
+    $(sel).addEventListener('input', readRounding);
   });
 
   $('#saveCalc').onclick = async () => {
-    readForm();
+    readRounding();
     const btn = $('#saveCalc');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
@@ -457,7 +633,7 @@
     const i = state.stores.findIndex(s => s.id === r.store.id);
     state.stores[i] = r.store;
     draft = JSON.parse(JSON.stringify(r.store.calculator));
-    fillForm();
+    renderRules();
     render();
   };
 
@@ -478,12 +654,17 @@
 
   // ───────────────────────────────────────────── boot
   (async function boot() {
-    if (state.filter) $('#search').value = state.filter;
     try {
+      // Server-side prefs first (they follow the login), query string wins over them.
+      const p = (await api('GET', '/api/prefs').catch(() => ({ prefs: {} }))).prefs || {};
+      if (!qs.get('store') && p.store) state.storeId = p.store;
+      if (!qs.get('grade') && p.grade) state.grade = p.grade;
+      if (!qs.get('view') && p.view) state.view = p.view;
+      if (state.filter) $('#search').value = state.filter;
+
       await loadStores();
       await loadMatrix();
       checkBanner();
-      // #calc deep-links straight into the selected store's calculator.
       if (location.hash === '#calc' && store()) openCalc();
     } catch (e) {
       $('#body').innerHTML = '';

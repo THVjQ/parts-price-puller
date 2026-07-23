@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 
 const MODE = (process.env.AUTH_MODE || 'password').toLowerCase();
+const USERNAME = process.env.SITE_USER || 'SOSPhonerepairs';
 const PASSWORD = process.env.SITE_PASSWORD || '';
 const COOKIE = 'ppp_session';
 const TTL_MS = (Number(process.env.SESSION_DAYS) || 30) * 86400000;
@@ -67,11 +68,16 @@ function noteAttempt(ip, ok) {
   attempts.set(ip, a);
 }
 
-function checkPassword(given) {
-  const a = Buffer.from(String(given || ''));
-  const b = Buffer.from(PASSWORD);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+const same = (given, want) => {
+  const a = Buffer.from(String(given == null ? '' : given));
+  const b = Buffer.from(String(want));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+// One shared account. The username is matched case-insensitively — staff type it on
+// phones with autocapitalise on, and it is a deterrent, not a secret.
+function checkLogin(username, password) {
+  return same(String(username || '').trim().toLowerCase(), USERNAME.toLowerCase()) && same(password, PASSWORD);
 }
 
 function isLoggedIn(req) {
@@ -91,4 +97,4 @@ function clearSession(res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` + (SECURE ? '; Secure' : ''));
 }
 
-module.exports = { MODE, isLoggedIn, setSession, clearSession, checkPassword, tooManyAttempts, noteAttempt };
+module.exports = { MODE, USERNAME, isLoggedIn, setSession, clearSession, checkLogin, tooManyAttempts, noteAttempt };

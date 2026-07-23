@@ -11,31 +11,39 @@
 #   • the "Reset to git defaults" button in the editor re-reads the values below
 #
 # CALCULATOR
-#   retail = round( (wholesale × (1 + markup%)) + labour )   [+ GST if gst: true]
+#   retail = cost × multiplyPercent + add
+#   …and if `threshold` is set and the cost is OVER it:
+#   retail = cost × overMultiplyPercent + overAdd
 #
-#   mode          flat  → markupPercent applies to every price
-#                 tiers → the first tier whose `upTo` ≥ wholesale wins (null = no cap)
-#   labour        flat dollars added after markup (fitting time)
-#   gst           true = add settings.yml → site.gstPercent to the final figure
-#   rounding.mode none | nearest | up | down   (to rounding.step dollars)
-#   rounding.endsWith  null, or cents to snap to — 0.99 gives $149.99-style pricing
+#   multiplyPercent carries GST — 110 = "+10% GST", 130 = "GST plus 20% on the part".
+#   add is the labour/fitting dollars.
+#
+# Rules are keyed "deviceGroup|part", most specific wins, and any field you leave out
+# is inherited from the less specific rule:
+#
+#   "*|*"          the base rule — every part, every device
+#   "iphone|*"     every iPhone part
+#   "*|LCD"        LCD on every device family
+#   "iphone|LCD"   iPhone LCD specifically
+#
+# Group ids come from config/devices.yml (iphone, samsung-s, samsung-a, other — add
+# `google` there when those devices land and it appears in the editor automatically).
+# Part keys come from config/parts.yml.
 #
 # ⚠ These numbers are a STARTING POINT, not your real margins. Set them per store in
-#   the UI (or here before first boot) — see README "Migration step 2".
+#   the UI (Calculator button) — those edits live in the database and git never
+#   overwrites them.
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults: &default_calc
-  mode: tiers
-  markupPercent: 60          # used when mode: flat
-  tiers:
-    - { upTo: 30,   markupPercent: 200 }
-    - { upTo: 60,   markupPercent: 150 }
-    - { upTo: 120,  markupPercent: 110 }
-    - { upTo: 250,  markupPercent: 80 }
-    - { upTo: null, markupPercent: 60 }   # everything above the last capped tier
-  labour: 40
-  gst: true
-  rounding: { mode: nearest, step: 5, endsWith: null }
+  rounding: { mode: none, step: 5, endsWith: null }
+  rules:
+    # cost × 110% + $90; anything over $250 → cost × 110% + $150
+    "*|*":       { multiplyPercent: 110, add: 90, threshold: 250, overAdd: 150 }
+    # examples — delete or edit freely, the UI writes this same structure
+    "*|BAT_AM":  { add: 60 }
+    "*|BAT_SP":  { add: 60 }
+    "*|CHARGE_PORT": { add: 70 }
 
 stores:
   - { id: airlie-beach,   name: Airlie Beach,    calculator: *default_calc }
