@@ -452,17 +452,29 @@ function maybePrune(cfg) {
 }
 
 // ───────────────────────────────────────────────────────── boot
-(function start() {
-  // git first: on a cold container the bind mount may not have the repo yet, and the
-  // config loader would have nothing to read.
-  gitsync.start(() => { config.invalidate(); config.get(); });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  let cfg;
-  try {
-    cfg = config.get();
-  } catch (e) {
-    console.error('FATAL: could not load config from', config.CONFIG_DIR, '-', e.message);
-    process.exit(1);
+(async function start() {
+  // AWAIT the first git sync. On a cold container the volume is empty, so there is no
+  // config/*.yml to read until the fetch lands — starting without waiting meant the
+  // process exited before its own clone finished, forever.
+  await gitsync.start(() => { config.invalidate(); config.get(); });
+
+  let cfg = null;
+  for (let attempt = 1; attempt <= 6 && !cfg; attempt++) {
+    try {
+      cfg = config.get();
+    } catch (e) {
+      console.error(`[boot] config not readable yet (attempt ${attempt}/6): ${e.message}`);
+      if (attempt === 6) {
+        console.error('FATAL: could not load config from', config.CONFIG_DIR, '— giving up so the container restarts and retries.');
+        console.error('       Check network/DNS to github.com from this container, and GIT_REMOTE/GIT_BRANCH.');
+        process.exit(1);
+      }
+      await sleep(10000);
+      await gitsync.pull();     // transient network/DNS on a NAS that just booted
+      config.invalidate();
+    }
   }
   reindex(cfg);
   db.seedStores(cfg.storeSeeds);

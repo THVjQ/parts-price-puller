@@ -47,14 +47,17 @@ async function pull() {
   const before = last.head;
   try {
     if (!isRepo()) {
+      // `git init` + fetch rather than `git clone`: clone refuses a non-empty directory,
+      // and a container killed mid-clone leaves exactly that behind — which turns one
+      // failed boot into a permanent crash loop on a fresh volume.
       fs.mkdirSync(REPO_DIR, { recursive: true });
-      const entries = fs.readdirSync(REPO_DIR);
-      if (entries.length) throw new Error(`${REPO_DIR} is not a git checkout and is not empty — clone the repo there first`);
-      await git(['clone', '--branch', BRANCH, '--depth', '20', REMOTE, REPO_DIR], '/');
-    } else {
-      await git(['fetch', '--depth', '20', 'origin', BRANCH], REPO_DIR);
-      await git(['reset', '--hard', 'origin/' + BRANCH], REPO_DIR);
+      await git(['init', '-q'], REPO_DIR);
+      await git(['remote', 'add', 'origin', REMOTE], REPO_DIR)
+        .catch(() => git(['remote', 'set-url', 'origin', REMOTE], REPO_DIR));
     }
+    await git(['fetch', '--depth', '20', 'origin', BRANCH], REPO_DIR);
+    // FETCH_HEAD, not origin/BRANCH: a freshly init'd repo has no remote-tracking ref yet.
+    await git(['reset', '--hard', 'FETCH_HEAD'], REPO_DIR);
     const head = await git(['rev-parse', '--short', 'HEAD'], REPO_DIR);
     const subject = await git(['log', '-1', '--pretty=%s'], REPO_DIR);
     last = { at: new Date().toISOString(), ok: true, head, changed: before !== null && before !== head, message: subject };
@@ -68,18 +71,23 @@ async function pull() {
   return last;
 }
 
+/**
+ * Starts the sync loop and RESOLVES ONCE THE FIRST PULL IS DONE — the caller must be
+ * able to await it, because on a fresh volume there is no config/*.yml to read until
+ * that first fetch lands.
+ */
 function start(onUpdate) {
   if (!ENABLED) {
     last = { at: null, ok: null, head: null, changed: false, message: 'disabled (GIT_SYNC=0)' };
     console.log('[git] sync disabled');
-    return null;
+    return Promise.resolve(last);
   }
-  const tick = () => pull().then(r => { if (r.changed && onUpdate) onUpdate(r); });
-  tick();
+  const tick = () => pull().then(r => { if (r.changed && onUpdate) onUpdate(r); return r; });
+  console.log(`[git] syncing ${REMOTE}#${BRANCH} into ${REPO_DIR} every ${INTERVAL / 1000}s`);
+  const first = tick();
   const t = setInterval(tick, INTERVAL);
   t.unref?.();
-  console.log(`[git] syncing ${REMOTE}#${BRANCH} into ${REPO_DIR} every ${INTERVAL / 1000}s`);
-  return t;
+  return first;
 }
 
 module.exports = { start, pull, status: () => ({ ...last, enabled: ENABLED, repo: REPO_DIR, branch: BRANCH, intervalSec: INTERVAL / 1000 }) };
