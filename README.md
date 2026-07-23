@@ -1,7 +1,7 @@
 # 💰 Parts Price Puller
 
 Self-hosted wholesale price matrix for SOS Phone Repairs, at
-**[pricing.sosphonerepairs.thvjq.com.au](https://pricing.sosphonerepairs.thvjq.com.au)**.
+**[pricing.thvjq.com.au](https://pricing.thvjq.com.au)**.
 
 Pulls **logged-in wholesale prices** from [CrazyParts](https://crazyparts.com.au) into a
 matrix — iPhone 6→16, Samsung S8→S25 + A-series, across 10 part types (LCD/OLED by grade,
@@ -45,7 +45,7 @@ commit, and the running site picks it up — within seconds via the webhook, or 
 
 | Field | Value |
 |---|---|
-| Payload URL | `https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing` |
+| Payload URL | `https://pricing.thvjq.com.au/hooks/pricing` |
 | Content type | `application/json` |
 | Secret | the same string as `WEBHOOK_SECRET` |
 | Events | just the push event |
@@ -77,9 +77,9 @@ can't build), one port behind the tunnel.
    `WEBHOOK_SECRET`, and the CrazyParts login.
 3. Install. First boot clones this repo into the `ppp_repo` volume by itself — no
    datasets to prepare, nothing to copy up front.
-4. **Cloudflare** → point `pricing.sosphonerepairs.thvjq.com.au` at
+4. **Cloudflare** → point `pricing.thvjq.com.au` at
    `http://<truenas-ip>:8084`.
-5. **GitHub webhook** → `https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing`
+5. **GitHub webhook** → `https://pricing.thvjq.com.au/hooks/pricing`
    (see [Live config editing](#live-config-editing)).
 
 ⚠ Back up the **`ppp_data`** volume — it holds every price, pin and store calculator, and
@@ -183,7 +183,7 @@ to any device. **Reset to git defaults** hands it back.
 (auto-updates via `@updateURL`).
 
 First run: open CrazyParts logged in → 💰 panel (bottom-left) → **⚙ Settings** → the site
-URL (`https://pricing.sosphonerepairs.thvjq.com.au`) and the **ingest key** (`INGEST_KEY`
+URL (`https://pricing.thvjq.com.au`) and the **ingest key** (`INGEST_KEY`
 from `.env`). Both live in Tampermonkey storage, so updates never wipe them.
 
 ### Setup Mode — pin exact products

@@ -101,7 +101,7 @@ app.get('/login', (req, res) => {
 // ───────────────────────────────────────────────────────── GitHub webhook
 // Same deal as the THVjQ-Website deployer: point a GitHub push webhook here and a
 // commit to config/*.yml is live in seconds instead of waiting for the poll.
-//   Payload URL:  https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing
+//   Payload URL:  https://pricing.thvjq.com.au/hooks/pricing
 //   Content type: application/json     Secret: WEBHOOK_SECRET     Event: push
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 

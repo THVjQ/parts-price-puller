@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.0.0
+// @version      2.0.1
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -14,7 +14,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @connect      pricing.sosphonerepairs.thvjq.com.au
+// @connect      pricing.thvjq.com.au
 // @connect      thvjq.com.au
 // @connect      localhost
 // @run-at       document-idle
@@ -22,8 +22,8 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.0.0';
-  const DEFAULT_SITE = 'https://pricing.sosphonerepairs.thvjq.com.au';
+  const SCRIPT_VERSION = '2.0.1';
+  const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
   // v2: these point at the self-hosted site, not Apps Script.

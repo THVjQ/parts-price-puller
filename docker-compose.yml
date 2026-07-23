@@ -64,7 +64,7 @@ services:
   # Optional: publish the site through a Cloudflare Tunnel instead of exposing a port.
   #   docker compose --profile cloudflare up -d
   # Create the tunnel in the Cloudflare dashboard, point the public hostname
-  # pricing.sosphonerepairs.thvjq.com.au at http://web:8080, and put the token in .env.
+  # pricing.thvjq.com.au at http://web:8080, and put the token in .env.
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: ppp-cloudflared

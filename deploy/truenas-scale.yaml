@@ -6,7 +6,7 @@
 # ---------------------------------------------------------------------
 #  Site   : http://<truenas-ip>:8084
 #  Webhook: http://<truenas-ip>:8084/hooks/pricing
-#  Point the Cloudflare tunnel  pricing.sosphonerepairs.thvjq.com.au -> <truenas-ip>:8084
+#  Point the Cloudflare tunnel  pricing.thvjq.com.au -> <truenas-ip>:8084
 #
 #  EDIT THESE:
 #   - SITE_PASSWORD    -> staff login password (username is SOSPhonerepairs)
@@ -18,7 +18,7 @@
 #  every GIT_SYNC_INTERVAL seconds and hot-reloads config/*.yml. Add the GitHub
 #  webhook below and a push is live in seconds instead:
 #    repo -> Settings -> Webhooks -> Add webhook
-#      Payload URL : https://pricing.sosphonerepairs.thvjq.com.au/hooks/pricing
+#      Payload URL : https://pricing.thvjq.com.au/hooks/pricing
 #      Content type: application/json
 #      Secret      : the same WEBHOOK_SECRET
 #      Events      : just the push event      (GitHub pings it -> expect 200 "pong")

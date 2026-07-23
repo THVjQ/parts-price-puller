@@ -2,7 +2,7 @@
  * Parts Price Puller — Willard scheduled scraper v2.0.0
  *
  * Logs into CrazyParts with Playwright and pushes prices to the SELF-HOSTED site
- * (pricing.sosphonerepairs.thvjq.com.au). No Google Apps Script anywhere.
+ * (pricing.thvjq.com.au). No Google Apps Script anywhere.
  *
  * Config — devices, parts, queries, pins, schedule, rate limits — comes from
  * GET {SITE_URL}/api/config, which the web app renders from config/*.yml. That keeps
