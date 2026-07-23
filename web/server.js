@@ -86,12 +86,12 @@ app.post('/api/login', (req, res) => {
   const ok = auth.checkLogin(b.username, b.password);
   auth.noteAttempt(ip, ok);
   if (!ok) return res.status(401).json({ error: 'Wrong username or password.' });
-  auth.setSession(res);
+  auth.setSession(req, res);
   db.log('web', '', 'Login from ' + ip);
   res.json({ ok: true });
 });
 
-app.post('/api/logout', (req, res) => { auth.clearSession(res); res.json({ ok: true }); });
+app.post('/api/logout', (req, res) => { auth.clearSession(req, res); res.json({ ok: true }); });
 
 app.get('/login', (req, res) => {
   if (auth.isLoggedIn(req)) return res.redirect('/');

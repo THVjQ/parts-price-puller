@@ -43,7 +43,7 @@ services:
       AUTH_MODE: password                 # password | cf-access | none
       SITE_USER: "SOSPhonerepairs"
       SITE_PASSWORD: "1234"               # ⬅ EDIT — a deterrent, not a secret
-      SECURE_COOKIE: "1"                  # 0 only if reached over plain http
+      SECURE_COOKIE: "auto"               # auto = Secure only when reached over https
 
       # ── machine callers: scraper + Tampermonkey ─────────────────────────
       INGEST_KEY: "⚠ CHANGE ME — openssl rand -hex 32"

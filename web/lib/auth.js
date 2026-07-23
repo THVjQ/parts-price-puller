@@ -14,7 +14,13 @@ const USERNAME = process.env.SITE_USER || 'SOSPhonerepairs';
 const PASSWORD = process.env.SITE_PASSWORD || '';
 const COOKIE = 'ppp_session';
 const TTL_MS = (Number(process.env.SESSION_DAYS) || 30) * 86400000;
-const SECURE = process.env.SECURE_COOKIE !== '0';
+// auto (default) = mark the cookie Secure only when the request actually arrived over
+// https. A fixed "1" silently breaks login over plain http on the LAN — the browser
+// drops the cookie and you bounce back to /login with no error — which is exactly what
+// happens while a domain's TLS is still being sorted out.
+const SECURE_MODE = process.env.SECURE_COOKIE || 'auto';
+const isHttps = req => Boolean(req && (req.secure || String(req.get('x-forwarded-proto') || '').split(',')[0].trim() === 'https'));
+const useSecure = req => (SECURE_MODE === '1' ? true : SECURE_MODE === '0' ? false : isHttps(req));
 
 // A stable secret means sessions survive restarts. Derived from the password unless
 // one is given explicitly — changing SITE_PASSWORD then logs everyone out, which is
@@ -87,14 +93,14 @@ function isLoggedIn(req) {
   return Boolean(verify(readCookie(req, COOKIE)));
 }
 
-function setSession(res) {
+function setSession(req, res) {
   const token = sign({ exp: Date.now() + TTL_MS });
   res.setHeader('Set-Cookie',
     `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(TTL_MS / 1000)}` +
-    (SECURE ? '; Secure' : ''));
+    (useSecure(req) ? '; Secure' : ''));
 }
-function clearSession(res) {
-  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` + (SECURE ? '; Secure' : ''));
+function clearSession(req, res) {
+  res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` + (useSecure(req) ? '; Secure' : ''));
 }
 
 module.exports = { MODE, USERNAME, isLoggedIn, setSession, clearSession, checkLogin, tooManyAttempts, noteAttempt };
