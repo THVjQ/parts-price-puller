@@ -68,7 +68,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 90s
 
   scraper:
     image: ghcr.io/thvjq/parts-price-puller:latest
