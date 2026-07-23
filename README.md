@@ -141,6 +141,10 @@ scraper and the userscript keep writing their own numbers underneath (you can st
 them in the cell popover under "Also"), but the cell shows yours until you right-click →
 **↩ Clear manual price**, which drops it back to the live cheapest price.
 
+The same menu is where you **📌 Unpin this cell** (amber dot = pinned). Setup Mode can
+re-point a pin but never remove one, and there's no Pins tab any more — this is it. The
+last pulled price stays in the cell; it just stops being refreshed.
+
 ### The calculator
 
 ```

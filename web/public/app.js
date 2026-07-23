@@ -305,6 +305,19 @@
     if (c.url) {
       item('🔗 Open product page', '', () => { window.open(c.url, '_blank', 'noopener'); closeMenu(); });
     }
+    // The only way to drop a pin — Setup Mode can re-pin a cell but never unbind one,
+    // and the sheet's Pins tab (where you used to delete the row) is gone.
+    if (c.pinned) {
+      item('📌 Unpin this cell', 'danger', async () => {
+        try {
+          await api('DELETE', '/api/pins', {
+            device: td.dataset.device, part: td.dataset.part, grade: state.grade, source: c.source === 'MANUAL' ? 'CP' : (c.source || 'CP'),
+          });
+          closeMenu();
+          await loadMatrix();
+        } catch (e) { alert('Could not unpin: ' + e.message); }
+      });
+    }
     item('✕ Cancel', 'muted', closeMenu);
 
     place(menu, td);
