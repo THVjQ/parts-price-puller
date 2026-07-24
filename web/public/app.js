@@ -21,6 +21,7 @@
     view: qs.get('view') || 'wholesale',
     grade: qs.get('grade') || '',
     filter: qs.get('q') || '',
+    family: qs.get('family') || localStorage.getItem('ppp.family') || '',   // active device tab
     currency: '$',
     gstPercent: 10,
   };
@@ -57,7 +58,7 @@
   function savePrefs() {
     clearTimeout(prefsTimer);
     prefsTimer = setTimeout(() => {
-      api('PUT', '/api/prefs', { store: state.storeId, grade: state.grade, view: state.view }).catch(() => {});
+      api('PUT', '/api/prefs', { store: state.storeId, grade: state.grade, view: state.view, family: state.family }).catch(() => {});
     }, 400);
   }
 
@@ -101,40 +102,74 @@
     return s ? PPPCalc.computeRetail(price, s.calculator, group, part) : null;
   };
 
+  // Which families actually have devices, in config order. This drives the right rail.
+  function activeGroups() {
+    const d = state.data;
+    if (!d) return [];
+    const used = new Set(d.rows.map(r => r.group));
+    return d.groups.filter(g => used.has(g.id));
+  }
+  const currentGroup = () => {
+    const gs = activeGroups();
+    return gs.find(g => g.id === state.family) || gs[0] || null;
+  };
+  const partMeta = key => (state.data.parts.find(p => p.key === key) || { key, label: key });
+
+  // How many devices in a family match the current filter — powers the rail counts.
+  function familyMatchCount(gid) {
+    const q = state.filter.trim().toLowerCase();
+    return state.data.rows.filter(r => r.group === gid && (!q || r.device.toLowerCase().includes(q))).length;
+  }
+
+  function renderFamilyRail() {
+    const rail = $('#familyRail');
+    rail.innerHTML = '';
+    const cur = currentGroup();
+    activeGroups().forEach(g => {
+      const b = el('button', 'fam' + (cur && g.id === cur.id ? ' on' : ''));
+      b.appendChild(el('span', 'fam-label', g.label));
+      const n = familyMatchCount(g.id);
+      const count = el('span', 'fam-count', String(n));
+      if (state.filter.trim() && n === 0) b.classList.add('dim');
+      b.appendChild(count);
+      b.onclick = () => {
+        state.family = g.id;
+        localStorage.setItem('ppp.family', g.id);
+        savePrefs();
+        render();
+      };
+      rail.appendChild(b);
+    });
+  }
+
   function render() {
     const d = state.data;
     if (!d) return;
 
-    const head = $('#headRow');
-    head.innerHTML = '';
-    head.appendChild(Object.assign(el('th', 'devcol', 'Device'), { scope: 'col' }));
-    d.parts.forEach(p => head.appendChild(Object.assign(el('th', null, p.label), { scope: 'col' })));
-
-    const groups = new Map(d.groups.map(g => [g.id, g.label]));
+    renderFamilyRail();
+    const group = currentGroup();
+    const cols = (group && group.parts) || d.parts.map(p => p.key);
     const view = store() ? state.view : 'wholesale';
 
+    // header: Device + this family's columns only
+    const head = $('#headRow');
+    head.innerHTML = '';
+    head.appendChild(Object.assign(el('th', 'devcol', (group ? group.label : 'Device')), { scope: 'col' }));
+    cols.forEach(k => head.appendChild(Object.assign(el('th', null, partMeta(k).label), { scope: 'col' })));
+
     const body = document.createDocumentFragment();
-    let lastGroup = null;
+    const rows = d.rows.filter(r => !group || r.group === group.id);
 
-    d.rows.forEach(row => {
-      if (row.group !== lastGroup) {
-        lastGroup = row.group;
-        const tr = el('tr', 'grouprow');
-        const th = el('th', null, groups.get(row.group) || row.group);
-        th.colSpan = d.parts.length + 1;
-        tr.appendChild(th);
-        body.appendChild(tr);
-      }
-
+    rows.forEach(row => {
       const tr = el('tr');
       tr.dataset.device = row.device.toLowerCase();
       tr.appendChild(el('td', 'devcol', row.device));
 
-      d.parts.forEach(p => {
-        const c = row.cells[p.key] || {};
+      cols.forEach(k => {
+        const c = row.cells[k] || {};
         const td = el('td', 'cell');
         td.dataset.device = row.device;
-        td.dataset.part = p.key;
+        td.dataset.part = k;
         td.dataset.group = row.group;
 
         if (c.price == null) {
@@ -142,7 +177,7 @@
           td.textContent = c.ts ? '—' : '';
           if (c.ts) td.dataset.miss = '1';
         } else {
-          const retail = retailFor(c.price, row.group, p.key);
+          const retail = retailFor(c.price, row.group, k);
           if (c.prev != null && c.prev !== c.price) td.classList.add(c.price > c.prev ? 'up' : 'down');
           if (c.manual) td.classList.add('manual');
           if (c.pinned) td.classList.add('pinned');
@@ -170,21 +205,23 @@
 
   function applyFilter() {
     const q = state.filter.trim().toLowerCase();
-    let shownInGroup = 0;
-    const rows = [...$('#body').children];
-    // Walk backwards so a group header can be hidden once we know every row under it
-    // filtered out.
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const tr = rows[i];
-      if (tr.classList.contains('grouprow')) {
-        tr.classList.toggle('hidden', shownInGroup === 0);
-        shownInGroup = 0;
-      } else {
-        const hit = !q || tr.dataset.device.includes(q);
-        tr.classList.toggle('hidden', !hit);
-        if (hit) shownInGroup++;
+    let shown = 0;
+    for (const tr of $('#body').children) {
+      const hit = !q || (tr.dataset.device || '').includes(q);
+      tr.classList.toggle('hidden', !hit);
+      if (hit) shown++;
+    }
+    // A filter that hits nothing in this family but matches another one: nudge the user
+    // there instead of showing an empty grid.
+    if (q && shown === 0) {
+      const other = activeGroups().find(g => g.id !== (currentGroup() || {}).id && familyMatchCount(g.id) > 0);
+      if (other) {
+        state.family = other.id;
+        localStorage.setItem('ppp.family', other.id);
+        return render();
       }
     }
+    renderFamilyRail();   // refresh the per-family match counts
   }
 
   function reflectViewAvailability() {
@@ -426,6 +463,23 @@
 
   const num = v => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
 
+  // Parts to show for a calculator tab. A specific family shows only its own columns
+  // (so the iPad tab lists just LCD + Digitiser); "All devices" shows every part any
+  // family uses, so a base rule can be set for all of them.
+  const plainLabel = s => String(s).replace(/\s*\([^)]*\)\s*$/, '');
+  function calcParts(groupId) {
+    let keys;
+    if (groupId === '*') {
+      keys = [];
+      state.data.groups.forEach(g => (g.parts || []).forEach(k => { if (!keys.includes(k)) keys.push(k); }));
+      if (!keys.length) keys = state.data.parts.map(p => p.key);
+    } else {
+      const g = state.data.groups.find(x => x.id === groupId);
+      keys = (g && g.parts) || state.data.parts.map(p => p.key);
+    }
+    return keys.map(k => ({ key: k, label: plainLabel(partMeta(k).label) }));
+  }
+
   function renderRules() {
     const tb = $('#rulesBody');
     tb.innerHTML = '';
@@ -435,10 +489,8 @@
       ? 'These apply to every device family unless that family overrides them below.'
       : 'Blank = inherit from “All devices”. Fill a box to override it for this family only.';
 
-    // Rules are not per grade, so drop the "(BQ7)" suffix the matrix headers carry.
-    const plain = s => String(s).replace(/\s*\([^)]*\)\s*$/, '');
     const rows = [{ key: '*', label: draftGroup === '*' ? 'All parts (base)' : 'All parts here' }]
-      .concat(state.data.parts.map(p => ({ key: p.key, label: plain(p.label) })));
+      .concat(calcParts(draftGroup));
 
     rows.forEach(r => {
       const ruleKey = PPPCalc.keyFor(draftGroup, r.key);
@@ -491,8 +543,7 @@
     const tb = $('#previewBody');
     tb.innerHTML = '';
     const costs = [25, 60, 150, 400];
-    const plain = s => String(s).replace(/\s*\([^)]*\)\s*$/, '');
-    const rows = [{ key: '*', label: 'Base' }].concat(state.data.parts.map(p => ({ key: p.key, label: plain(p.label) })));
+    const rows = [{ key: '*', label: 'Base' }].concat(calcParts(draftGroup));
     rows.forEach(r => {
       const tr = el('tr');
       tr.appendChild(el('td', null, r.label));
@@ -673,6 +724,7 @@
       if (!qs.get('store') && p.store) state.storeId = p.store;
       if (!qs.get('grade') && p.grade) state.grade = p.grade;
       if (!qs.get('view') && p.view) state.view = p.view;
+      if (!qs.get('family') && !state.family && p.family) state.family = p.family;
       if (state.filter) $('#search').value = state.filter;
 
       await loadStores();

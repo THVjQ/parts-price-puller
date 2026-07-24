@@ -299,6 +299,7 @@ app.put('/api/prefs', requireSession, (req, res) => {
     store: clean(b.store).slice(0, 60),
     grade: clean(b.grade).slice(0, 30),
     view: ['wholesale', 'retail', 'both'].includes(b.view) ? b.view : 'wholesale',
+    family: clean(b.family).slice(0, 40),
   };
   db.setPref('ui', prefs);
   res.json({ ok: true, prefs });
@@ -349,9 +350,16 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
 
   const pinned = new Set(db.listPins().map(p => `${p.device}|${p.part}`));
 
+  // Each family shows only its own columns (iPad = LCD + Digitiser, phones = the full
+  // set, …). Compute cells for a device's applicable parts only.
+  const partByKey = new Map(cfg.parts.map(p => [p.key, p]));
+  const colsByGroup = new Map(cfg.groups.map(g => [g.id, g.parts]));
+  const allKeys = cfg.parts.map(p => p.key);
+
   const rows = cfg.devices.filter(d => d.enabled).map(d => {
     const cells = {};
-    for (const part of cfg.parts) {
+    const keys = colsByGroup.get(d.group) || allKeys;
+    for (const part of keys.map(k => partByKey.get(k)).filter(Boolean)) {
       const offers = [];
       let manual = null;
       for (const src of sourceKeys.concat('MANUAL')) {

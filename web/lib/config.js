@@ -52,7 +52,13 @@ function build() {
   const storesDoc   = readYaml('stores.yml');
   const settingsDoc = readYaml('settings.yml');
 
-  const groups = (devicesDoc.groups || []).map(g => ({ id: String(g.id), label: String(g.label || g.id) }));
+  // A group may declare its own ordered column set with `parts: [KEY, ...]`. Kept raw
+  // here; resolved against real part keys once parts are parsed, below.
+  const rawGroups = (devicesDoc.groups || []).map(g => ({
+    id: String(g.id),
+    label: String(g.label || g.id),
+    parts: flat(g.parts).map(k => k.toUpperCase()),
+  }));
   const devices = (devicesDoc.devices || [])
     .filter(d => d && d.name)
     .map(d => ({
@@ -69,10 +75,28 @@ function build() {
       key: String(p.key).trim(),
       label: String(p.label || p.key),
       graded: p.graded === true,
+      // Restrict a part to certain device families. Empty = universal (every family
+      // that doesn't pin its own column set). DIGITIZER lives only on iPad, for example.
+      groups: flat(p.groups).map(g => String(g).toLowerCase()),
       query: String(p.query || '{device} ' + p.key),
       must: flat(p.must),
       exclude: flat(p.exclude),
     }));
+
+  // Resolve each group's ordered column list.
+  //   explicit `parts:` on the group  → exactly those (in that order)
+  //   otherwise                        → every universal part (part.groups empty),
+  //                                       plus any part that names this group
+  const partByKey = new Map(parts.map(p => [p.key.toUpperCase(), p]));
+  const groups = rawGroups.map(g => {
+    let keys;
+    if (g.parts.length) {
+      keys = g.parts.filter(k => partByKey.has(k));
+    } else {
+      keys = parts.filter(p => !p.groups.length || p.groups.includes(g.id)).map(p => p.key);
+    }
+    return { id: g.id, label: g.label, parts: keys };
+  });
 
   const grades = {
     list: flat((settingsDoc.grades || {}).list).length ? flat((settingsDoc.grades || {}).list) : ['BQ7'],

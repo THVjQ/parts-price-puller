@@ -116,12 +116,17 @@ on a different device and the site comes back the way you left it.
 
 | Control | What it does |
 |---|---|
+| **Family rail** (right side) | One tab per device family — iPhone, Samsung S / A / Z, Google Pixel, iPad. Click to switch; the badge is that family's device count |
 | **Store** | Applies that store's calculator and reveals the retail figures |
 | **Grade** | AMP / BQ7 / SP / … — relabels and re-prices the LCD + OLED columns |
 | **Show** | Wholesale · Retail · Both |
-| **Filter** | Live device search |
-| **Calculator** | This store's markup, labour, GST and rounding — with a live preview |
+| **Filter** | Live device search — jumps to whichever family has the match |
+| **Calculator** | This store's per-part, per-family pricing rules — with a live preview |
 | **Status** | Config/git health, counts, recent activity, force a config pull |
+
+Each family shows only its own columns. **iPad** is deliberately trimmed to **Digitiser +
+LCD** (it's the `parts: [DIGI, LCD]` line on the iPad group in `config/devices.yml`); to
+give any family its own column set, add the same `parts:` list to its group.
 
 **Left-click** any cell for its source, matched product title, product link, timestamp,
 which rule priced it, what the other supplier quoted, and the change since the last pull.

@@ -1,6 +1,6 @@
 {
   "name": "parts-price-puller-web",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Self-hosted wholesale price matrix + per-store retail calculator (replaces the Google Sheet)",
   "main": "server.js",

@@ -104,3 +104,12 @@ parts:
     query: "{device} back glass"
     must: [back glass, rear glass, back cover, battery cover]
     exclude: [camera lens, screen, lcd, oled, *accessories]
+
+  # iPad only. `groups: [ipad]` keeps this column off every phone family; the ipad
+  # group in devices.yml pins its columns to exactly [DIGI, LCD].
+  - key: DIGI
+    label: Digitiser
+    groups: [ipad]
+    query: "{device} digitizer touch screen"
+    must: [digitizer, digitiser, touch screen, glass]
+    exclude: [lcd, display, *accessories]

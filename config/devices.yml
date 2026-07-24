@@ -13,10 +13,15 @@
 #   enabled  optional, defaults to true. false = hidden from the matrix + skipped by pulls.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# `parts:` on a group pins its exact columns (used for iPad, which only does Digitiser
+# + LCD). A group with no `parts:` gets every universal part from parts.yml.
 groups:
   - { id: iphone,    label: iPhone }
   - { id: samsung-s, label: Samsung Galaxy S }
   - { id: samsung-a, label: Samsung Galaxy A }
+  - { id: samsung-z, label: Samsung Galaxy Z }
+  - { id: google,    label: Google Pixel }
+  - { id: ipad,      label: iPad, parts: [DIGI, LCD] }
   - { id: other,     label: Other }
 
 devices:
@@ -120,3 +125,58 @@ devices:
   - { name: Samsung A71,  group: samsung-a }
   - { name: Samsung A72,  group: samsung-a }
   - { name: Samsung A73,  group: samsung-a }
+
+  # ── Samsung Galaxy Z (Fold / Flip) ────────────────────────────────────────
+  - { name: Samsung Z Flip,   search: "Galaxy Z Flip",   group: samsung-z }
+  - { name: Samsung Z Flip 3, search: "Galaxy Z Flip 3", group: samsung-z }
+  - { name: Samsung Z Flip 4, search: "Galaxy Z Flip 4", group: samsung-z }
+  - { name: Samsung Z Flip 5, search: "Galaxy Z Flip 5", group: samsung-z }
+  - { name: Samsung Z Flip 6, search: "Galaxy Z Flip 6", group: samsung-z }
+  - { name: Samsung Z Fold,   search: "Galaxy Z Fold",   group: samsung-z }
+  - { name: Samsung Z Fold 2, search: "Galaxy Z Fold 2", group: samsung-z }
+  - { name: Samsung Z Fold 3, search: "Galaxy Z Fold 3", group: samsung-z }
+  - { name: Samsung Z Fold 4, search: "Galaxy Z Fold 4", group: samsung-z }
+  - { name: Samsung Z Fold 5, search: "Galaxy Z Fold 5", group: samsung-z }
+  - { name: Samsung Z Fold 6, search: "Galaxy Z Fold 6", group: samsung-z }
+
+  # ── Google Pixel ──────────────────────────────────────────────────────────
+  - { name: Pixel 4,        search: "Google Pixel 4",        group: google }
+  - { name: Pixel 4 XL,     search: "Google Pixel 4 XL",     group: google }
+  - { name: Pixel 4a,       search: "Google Pixel 4a",       group: google }
+  - { name: Pixel 5,        search: "Google Pixel 5",        group: google }
+  - { name: Pixel 5a,       search: "Google Pixel 5a",       group: google }
+  - { name: Pixel 6,        search: "Google Pixel 6",        group: google }
+  - { name: Pixel 6 Pro,    search: "Google Pixel 6 Pro",    group: google }
+  - { name: Pixel 6a,       search: "Google Pixel 6a",       group: google }
+  - { name: Pixel 7,        search: "Google Pixel 7",        group: google }
+  - { name: Pixel 7 Pro,    search: "Google Pixel 7 Pro",    group: google }
+  - { name: Pixel 7a,       search: "Google Pixel 7a",       group: google }
+  - { name: Pixel 8,        search: "Google Pixel 8",        group: google }
+  - { name: Pixel 8 Pro,    search: "Google Pixel 8 Pro",    group: google }
+  - { name: Pixel 8a,       search: "Google Pixel 8a",       group: google }
+  - { name: Pixel 9,        search: "Google Pixel 9",        group: google }
+  - { name: Pixel 9 Pro,    search: "Google Pixel 9 Pro",    group: google }
+  - { name: Pixel 9 Pro XL, search: "Google Pixel 9 Pro XL", group: google }
+
+  # ── iPad (LCD + Digitiser only — see the ipad group in `groups` above) ──────
+  - { name: iPad 5 (2017),      search: "iPad 5",           group: ipad }
+  - { name: iPad 6 (2018),      search: "iPad 6",           group: ipad }
+  - { name: iPad 7 (2019),      search: "iPad 7",           group: ipad }
+  - { name: iPad 8 (2020),      search: "iPad 8",           group: ipad }
+  - { name: iPad 9 (2021),      search: "iPad 9",           group: ipad }
+  - { name: iPad 10 (2022),     search: "iPad 10",          group: ipad }
+  - { name: iPad Air 2,         search: "iPad Air 2",       group: ipad }
+  - { name: iPad Air 3,         search: "iPad Air 3",       group: ipad }
+  - { name: iPad Air 4,         search: "iPad Air 4",       group: ipad }
+  - { name: iPad Air 5,         search: "iPad Air 5",       group: ipad }
+  - { name: iPad Mini 4,        search: "iPad Mini 4",      group: ipad }
+  - { name: iPad Mini 5,        search: "iPad Mini 5",      group: ipad }
+  - { name: iPad Mini 6,        search: "iPad Mini 6",      group: ipad }
+  - { name: iPad Pro 9.7,       search: "iPad Pro 9.7",     group: ipad }
+  - { name: iPad Pro 10.5,      search: "iPad Pro 10.5",    group: ipad }
+  - { name: iPad Pro 11 (2018), search: "iPad Pro 11 2018", group: ipad }
+  - { name: iPad Pro 11 (2020), search: "iPad Pro 11 2020", group: ipad }
+  - { name: iPad Pro 11 (2021), search: "iPad Pro 11 2021", group: ipad }
+  - { name: iPad Pro 12.9 (2018), search: "iPad Pro 12.9 2018", group: ipad }
+  - { name: iPad Pro 12.9 (2020), search: "iPad Pro 12.9 2020", group: ipad }
+  - { name: iPad Pro 12.9 (2021), search: "iPad Pro 12.9 2021", group: ipad }

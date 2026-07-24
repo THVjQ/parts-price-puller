@@ -132,6 +132,24 @@ select:focus-visible, input:focus-visible, button:focus-visible {
 .seg.wide { display: flex; width: 100%; }
 .seg.wide button { flex: 1; }
 
+/* The calculator's device-family tabs — too many to fit one pill row, so wrap them
+   into a chip group instead of clipping the last ones off. */
+#groupSeg {
+  flex-wrap: wrap;
+  gap: 5px;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+}
+#groupSeg button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 50px;
+  min-height: 32px;
+}
+#groupSeg button.on { border-color: var(--brand); }
+
 /* ───────────────────────────── banner */
 .banner {
   background: var(--up-bg);
@@ -144,7 +162,52 @@ select:focus-visible, input:focus-visible, button:focus-visible {
 
 /* ───────────────────────────── matrix */
 main { flex: 1; min-height: 0; display: flex; }
-.tablewrap { flex: 1; overflow: auto; }
+.tablewrap { flex: 1; overflow: auto; min-width: 0; }
+
+/* right-hand device-family switcher */
+.family-rail {
+  flex: 0 0 auto;
+  width: 172px;
+  border-left: 1px solid var(--line-strong);
+  background: var(--header-bg);
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.family-rail .fam {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  font: 600 14px/1.2 var(--font-head);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 11px 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.family-rail .fam:hover { background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.family-rail .fam.on {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: var(--shadow);
+}
+.family-rail .fam.dim { opacity: .38; }
+.family-rail .fam-count {
+  font: 600 11px/1 var(--font-body);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  border-radius: 20px;
+  padding: 3px 7px;
+  min-width: 20px;
+  text-align: center;
+}
+.family-rail .fam.on .fam-count { color: #fff; background: rgba(255,255,255,.22); }
 
 table#matrix { border-collapse: separate; border-spacing: 0; font-size: 13px; }
 #matrix th, #matrix td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -382,4 +445,16 @@ body.login { align-items: center; justify-content: center; background: var(--hea
   .field.actions { margin-left: 0; }
   .brand-text span { display: none; }
   #matrix thead th.devcol, #matrix td.devcol { min-width: 130px; width: 130px; }
+  /* Family switcher moves to a horizontal strip above the grid on narrow screens. */
+  main { flex-direction: column-reverse; }
+  .family-rail {
+    width: auto;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    border-left: 0;
+    border-bottom: 1px solid var(--line-strong);
+    padding: 6px;
+  }
+  .family-rail .fam { width: auto; white-space: nowrap; padding: 8px 12px; }
 }
