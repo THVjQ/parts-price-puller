@@ -203,8 +203,9 @@ const upsertPinStmt = db.prepare(`
     product_id = excluded.product_id, variant_id = excluded.variant_id,
     title = excluded.title, url = excluded.url, price = excluded.price, ts = excluded.ts
 `);
-const listPinsStmt   = db.prepare(`SELECT * FROM pins ORDER BY device, part`);
-const deletePinStmt  = db.prepare(`DELETE FROM pins WHERE device = ? AND part = ? AND grade = ? AND source = ?`);
+const listPinsStmt           = db.prepare(`SELECT * FROM pins ORDER BY device, part`);
+const deletePinStmt          = db.prepare(`DELETE FROM pins WHERE device = ? AND part = ? AND grade = ? AND source = ?`);
+const deletePinsForCellStmt  = db.prepare(`DELETE FROM pins WHERE device = ? AND part = ?`);
 
 // ─────────────────────────────────────────────────────────────── stores
 const getStoreStmt   = db.prepare(`SELECT * FROM stores WHERE id = ?`);
@@ -307,6 +308,7 @@ module.exports = {
   upsertPin: p => upsertPinStmt.run(p),
   listPins: () => listPinsStmt.all(),
   deletePin: (d, p, g, s) => deletePinStmt.run(d, p, g, s).changes,
+  deletePinsForCell: (d, p) => deletePinsForCellStmt.run(d, p).changes,
   seedStores,
   listStores: () => listStoresStmt.all(),
   getStore: id => getStoreStmt.get(id),

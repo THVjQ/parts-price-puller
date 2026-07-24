@@ -283,9 +283,19 @@ app.post('/api/pins', requireKeyOrSession, (req, res) => {
 app.delete('/api/pins', requireKeyOrSession, (req, res) => {
   const cfg = config.get();
   const b = Object.keys(req.body || {}).length ? req.body : req.query;
+  const device = clean(b.device);
   const part = clean(b.part).toUpperCase();
-  const n = db.deletePin(clean(b.device), part, gradeFor(part, b.grade, cfg), clean(b.source || 'CP').toUpperCase());
-  db.log('web', '', `Unpinned ${b.device} / ${b.part}`);
+  if (!device || !part) return res.status(400).json({ error: 'device and part required' });
+  let n;
+  if (b.source) {
+    // TM panel: knows exact (device, part, grade, source) from GET /api/pins — use exact match.
+    n = db.deletePin(device, part, gradeFor(part, b.grade, cfg), clean(b.source).toUpperCase());
+  } else {
+    // Web UI "Unpin this cell": only knows device+part (grade and source at pin time may differ
+    // from the current UI grade selection) — delete all pins for this cell regardless of grade/source.
+    n = db.deletePinsForCell(device, part);
+  }
+  db.log('web', '', `Unpinned ${device} / ${part} (removed ${n})`);
   res.json({ ok: true, removed: n });
 });
 

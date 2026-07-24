@@ -458,9 +458,7 @@
     if (c.pinned) {
       item('📌 Unpin this cell', 'danger', async () => {
         try {
-          await api('DELETE', '/api/pins', {
-            device: td.dataset.device, part: td.dataset.part, grade: state.grade, source: c.source === 'MANUAL' ? 'CP' : (c.source || 'CP'),
-          });
+          await api('DELETE', '/api/pins', { device: td.dataset.device, part: td.dataset.part });
           closeMenu();
           await loadMatrix();
         } catch (e) { alert('Could not unpin: ' + e.message); }
