@@ -107,9 +107,11 @@ app.post('/api/login', (req, res) => {
   const ok = auth.checkLogin(b.username, b.password);
   auth.noteAttempt(ip, ok);
   if (!ok) return res.status(401).json({ error: 'Wrong username or password.' });
-  auth.setSession(req, res);
+  const token = auth.setSession(req, res);
   db.log('web', '', 'Login from ' + ip);
-  res.json({ ok: true });
+  // token also returned in the body so the userscript can send it as an X-PPP-Session
+  // header — cross-site calls can't rely on the SameSite=Lax cookie.
+  res.json({ ok: true, token });
 });
 
 app.post('/api/logout', (req, res) => { auth.clearSession(req, res); res.json({ ok: true }); });
@@ -184,8 +186,10 @@ app.get('/api/config', requireKeyOrSession, (req, res) => {
  * POST /api/ingest — a batch of prices from the scraper or the userscript.
  * Accepts both the new shape {source:'CP', origin:'tm', results:[…]} and the old
  * Apps Script one {site:'CP', source:'tm', results:[…]}.
+ * Auth: the scraper still uses X-Key; the userscript now rides the logged-in session
+ * (username + passcode), so either one is accepted.
  */
-app.post('/api/ingest', requireKey, (req, res) => {
+app.post('/api/ingest', requireKeyOrSession, (req, res) => {
   const cfg = config.get();
   const body = req.body || {};
   const supplier = clean(body.site || body.source || 'CP').toUpperCase();
@@ -217,7 +221,7 @@ app.post('/api/ingest', requireKey, (req, res) => {
   res.json({ ok: true, written: rows.length, skipped });
 });
 
-app.post('/api/log', requireKey, (req, res) => {
+app.post('/api/log', requireKeyOrSession, (req, res) => {
   const b = req.body || {};
   db.log(clean(b.origin || b.source) || 'unknown', clean(b.site || '').toUpperCase(), clean(b.message));
   res.json({ ok: true });

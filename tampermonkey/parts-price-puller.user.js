@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.0.1
+// @version      2.2.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,13 +22,16 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.0.1';
+  const SCRIPT_VERSION = '2.2.0';
   const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
-  // v2: these point at the self-hosted site, not Apps Script.
-  const getUrl = () => GM_getValue('siteUrl', DEFAULT_SITE);
-  const getKey = () => GM_getValue('ingestKey', '');
+  // v2.1: the script signs in the same way you do in a browser — the pricing site URL plus
+  // your login username + passcode (the SOSPhonerepairs account). No ingest key any more.
+  const getUrl  = () => GM_getValue('siteUrl', DEFAULT_SITE);
+  const getUser = () => GM_getValue('username', '');
+  const getPass = () => GM_getValue('passcode', '');
+  const isConfigured = () => Boolean(getUrl() && getUser() && getPass());
   // Which grade new pins belong to. Only the graded columns (LCD/OLED) use it — the
   // server decides, from parts.yml `graded:`. Empty = whatever settings.yml says.
   const getGrade = () => GM_getValue('grade', '');
@@ -84,17 +87,62 @@
   let abortFlag = false;
 
   // ---------------- Site comms ----------------
-  // The site authenticates machines with the X-Key header (INGEST_KEY). GM_xmlhttpRequest
-  // is cross-origin by design here, so no CORS dance and no site login cookie is needed.
-  function api(method, path, body) {
+  // The script signs in with username + passcode at /api/login and the site returns a
+  // signed session TOKEN in the JSON body. We store it and send it on every call in an
+  // `X-PPP-Session` header. (We deliberately do NOT use the login cookie: it is SameSite=Lax
+  // and HttpOnly, so a browser won't send it on the userscript's cross-site calls to the
+  // site — a header token is the reliable cross-origin path.)
+  const getSession = () => GM_getValue('session', '');
+
+  // Single-flight login: several calls that all hit a 401 at once share one login round-trip.
+  let loginPromise = null;
+  function login() {
+    if (loginPromise) return loginPromise;
+    loginPromise = new Promise((resolve, reject) => {
+      if (!isConfigured()) return reject(new Error('Not configured — click ⚙ Settings'));
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: getUrl() + '/api/login',
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify({ username: getUser(), password: getPass() }),
+        onload: r => {
+          let json = {};
+          try { json = JSON.parse(r.responseText); } catch (e) { /* may be empty */ }
+          if (r.status === 401) return reject(new Error('Wrong username or passcode — check ⚙ Settings.'));
+          if (r.status === 429) return reject(new Error(json.error || 'Too many login attempts — wait 15 minutes.'));
+          if (r.status >= 400) return reject(new Error(json.error || ('Login failed — HTTP ' + r.status)));
+          if (!json.token) return reject(new Error('Signed in, but the site sent no session token — the site may need its latest update (wait a few minutes and retry).'));
+          GM_setValue('session', json.token);
+          resolve(json);
+        },
+        onerror: () => reject(new Error('Network error reaching the site — is it in @connect and online?')),
+        ontimeout: () => reject(new Error('Login timed out')),
+        timeout: 60000,
+      });
+    }).finally(() => { loginPromise = null; });
+    return loginPromise;
+  }
+
+  // Authenticated call. Sends the stored session token; on a 401 it logs in once and
+  // replays the call, so an expired session heals itself without you touching Settings.
+  function api(method, path, body) { return apiCall(method, path, body, true); }
+  function apiCall(method, path, body, allowRelogin) {
     return new Promise((resolve, reject) => {
-      if (!getUrl() || !getKey()) return reject(new Error('Not configured — click ⚙ Settings'));
+      if (!isConfigured()) return reject(new Error('Not configured — click ⚙ Settings'));
+      const headers = { 'Content-Type': 'application/json' };
+      const sess = getSession();
+      if (sess) headers['X-PPP-Session'] = sess;
       GM_xmlhttpRequest({
         method,
         url: getUrl() + path,
-        headers: { 'Content-Type': 'application/json', 'X-Key': getKey() },
+        headers,
         data: body ? JSON.stringify(body) : undefined,
         onload: r => {
+          if (r.status === 401 && allowRelogin) {
+            // No session yet, or it expired — sign in, then replay this one call.
+            login().then(() => apiCall(method, path, body, false)).then(resolve, reject);
+            return;
+          }
           let json;
           try { json = JSON.parse(r.responseText); }
           catch (e) { return reject(new Error('HTTP ' + r.status + ' — not JSON: ' + String(r.responseText).slice(0, 200))); }
@@ -114,46 +162,51 @@
   const postRemovePin = (device, part, grade) => api('DELETE', '/api/pins', { device, part, grade, source: SITE.key });
 
   // ---------------- Debug: raw request + diagnosis ----------------
-  // Hits /api/config exactly like a real call but returns the untouched response
-  // (status, content-type, body) so a bad key / wrong host / login redirect is visible.
+  // Signs in, then hits /api/config exactly like a real call and shows the untouched
+  // response (status, content-type, body) so wrong login / wrong host / a login redirect
+  // are all visible.
   function rawTest(out) {
-    if (!getUrl() || !getKey()) { out('❌ Not configured. Click ⚙ Settings and enter the site URL + ingest key first.'); return; }
-    const realUrl = getUrl() + '/api/config';
-    out('⏳ GET ' + realUrl + '\n(X-Key: ***)\n…');
-    GM_xmlhttpRequest({
-      method: 'GET', url: realUrl,
-      headers: { 'Content-Type': 'application/json', 'X-Key': getKey() },
-      onload: r => {
-        const ct = (String(r.responseHeaders || '').match(/content-type:[^\r\n]*/i) || ['content-type: (none)'])[0].trim();
-        const finalUrl = r.finalUrl || '(unknown)';
-        const body = String(r.responseText || '');
-        let verdict;
-        if (r.status === 401) {
-          verdict = '⚠ 401 — the site rejected the key. It must match INGEST_KEY in the server .env exactly (no quotes, no spaces).';
-        } else if (/\/login/.test(finalUrl) || /<form[^>]*loginbox|Sign in/i.test(body)) {
-          verdict = '⚠ Got the login page. The URL is right but /api/config was not reached — check you pasted the site root (no /login, no trailing path).';
-        } else if (/^\s*</.test(body)) {
-          verdict = '⚠ Got HTML, not JSON. Usually the wrong host, or a Cloudflare error page in front of the site.';
-        } else {
-          try {
-            const j = JSON.parse(body);
-            verdict = j.error
-              ? '⚠ Site replied with an error: ' + j.error
-              : `✅ Connected — ${(j.devices || []).length} devices, ${(j.partLabels || []).length} parts, ${(j.pins || []).length} pins. If a pull still fails it is matching, not connectivity.`;
-          } catch (e) { verdict = '⚠ Response is neither HTML nor valid JSON: ' + e.message; }
-        }
-        out(
-          'HTTP ' + r.status + ' ' + (r.statusText || '') + '\n' +
-          'final URL: ' + finalUrl + '\n' +
-          ct + '\n' +
-          '────────────\n' + verdict + '\n────────────\n' +
-          body.slice(0, 1200) + (body.length > 1200 ? '\n…(' + body.length + ' bytes total)' : '')
-        );
-      },
-      onerror:   r => out('❌ Network error (is @connect allowed / URL reachable?)\n' + JSON.stringify(r).slice(0, 300)),
-      ontimeout: () => out('❌ Timed out after 60s.'),
-      timeout: 60000,
-    });
+    if (!isConfigured()) { out('❌ Not configured. Click ⚙ Settings and enter the site URL, username and passcode first.'); return; }
+    out('⏳ Signing in…');
+    login().then(() => {
+      const realUrl = getUrl() + '/api/config';
+      out('⏳ GET ' + realUrl + '\n(X-PPP-Session token)\n…');
+      const sess = getSession();
+      GM_xmlhttpRequest({
+        method: 'GET', url: realUrl,
+        headers: Object.assign({ 'Content-Type': 'application/json' }, sess ? { 'X-PPP-Session': sess } : {}),
+        onload: r => {
+          const ct = (String(r.responseHeaders || '').match(/content-type:[^\r\n]*/i) || ['content-type: (none)'])[0].trim();
+          const finalUrl = r.finalUrl || '(unknown)';
+          const body = String(r.responseText || '');
+          let verdict;
+          if (r.status === 401) {
+            verdict = '⚠ 401 — the session was rejected. Your username/passcode may be wrong, or the site has not picked up its latest update yet (wait a few minutes). Re-enter them in ⚙ Settings if needed.';
+          } else if (/\/login/.test(finalUrl) || /<form[^>]*loginbox|Sign in/i.test(body)) {
+            verdict = '⚠ Got the login page. The URL is right but /api/config was not reached — check you pasted the site root (no /login, no trailing path).';
+          } else if (/^\s*</.test(body)) {
+            verdict = '⚠ Got HTML, not JSON. Usually the wrong host, or a Cloudflare error page in front of the site.';
+          } else {
+            try {
+              const j = JSON.parse(body);
+              verdict = j.error
+                ? '⚠ Site replied with an error: ' + j.error
+                : `✅ Connected — ${(j.devices || []).length} devices, ${(j.partLabels || []).length} parts, ${(j.pins || []).length} pins. If a pull still fails it is matching, not connectivity.`;
+            } catch (e) { verdict = '⚠ Response is neither HTML nor valid JSON: ' + e.message; }
+          }
+          out(
+            'HTTP ' + r.status + ' ' + (r.statusText || '') + '\n' +
+            'final URL: ' + finalUrl + '\n' +
+            ct + '\n' +
+            '────────────\n' + verdict + '\n────────────\n' +
+            body.slice(0, 1200) + (body.length > 1200 ? '\n…(' + body.length + ' bytes total)' : '')
+          );
+        },
+        onerror:   r => out('❌ Network error (is @connect allowed / URL reachable?)\n' + JSON.stringify(r).slice(0, 300)),
+        ontimeout: () => out('❌ Timed out after 60s.'),
+        timeout: 60000,
+      });
+    }).catch(e => out('❌ Sign-in failed: ' + e.message));
   }
 
   // ---------------- Debug: capture a real search ----------------
@@ -430,7 +483,7 @@
   // ---------------- Scheduled auto-run (only works while a tab is open) ----------------
   async function scheduleCheck() {
     try {
-      if (running || !getUrl() || !getKey()) return;
+      if (running || !isConfigured()) return;
       if (!CONFIG) CONFIG = await getConfig().catch(() => null);
       if (!CONFIG || CONFIG.error) return;
       const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -474,7 +527,7 @@
       const btn = document.createElement('button');
       btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
       btn.title = 'Pin this product to a price cell';
-      btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
+      btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); quickPin(a, card); });
       // Warm the search cache while the pointer is on the button, so the click feels instant.
       let preTimer;
       btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => {
@@ -539,6 +592,17 @@
     if (best) for (const o of sel.options) if ((o.value || '').toLowerCase() === best) { sel.value = o.value; return o.value; }
     return sel.value;
   }
+  // Same "most specific wins" match, but standalone — returns the device object (or null)
+  // so one-click pinning can decide whether the row is unambiguous without a dropdown.
+  function detectDevice(title, devices) {
+    const t = (title || '').toLowerCase();
+    let best = null, bestLen = 0;
+    for (const d of devices) {
+      const v = (d.name || '').toLowerCase();
+      if (v && t.includes(v) && v.length > bestLen) { best = d; bestLen = v.length; }
+    }
+    return best;
+  }
   // Guess the part column from the title (order matters — most specific first).
   const PART_HINTS = [
     ['BACK_GLASS', /back glass|rear glass|back cover|battery cover/],
@@ -598,6 +662,41 @@
     }
     pinWorking = false;
     updatePinToast();
+  }
+
+  // One-click pin. If the tile gives an unambiguous read — a known device (row), a known
+  // part (column), and exactly ONE variant of the clicked product — pin it straight away,
+  // no dialog. Anything uncertain (unknown row/column, product not found in search, or
+  // several variants to choose between) falls back to the full modal so you sort it by hand.
+  async function quickPin(anchor, card) {
+    const btn = card.querySelector('.ppp-pin-btn');
+    const info = tileInfo(anchor, card);
+    await ensureConfig();
+    const devices = (CONFIG && CONFIG.devices) || [];
+    const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
+    const partKeys = new Set(parts.map(p => String(p.key).toUpperCase()));
+
+    const device = detectDevice(info.title, devices);
+    const partKey = detectPart(info.title);
+    // No confident row/column, or no product id to lock onto → let the user decide.
+    if (!device || !partKey || !partKeys.has(partKey.toUpperCase()) || !info.hintId) return openPinModal(anchor, card);
+
+    if (btn) btn.textContent = '⏳ Pinning';
+    let candidates;
+    try { candidates = await searchProducts(info.title, 12); }
+    catch (e) { if (btn) btn.textContent = '📌 Pin'; return openPinModal(anchor, card); }
+
+    // The exact product you clicked, matched by its stable id. One variant = unambiguous;
+    // zero (not found) or several (a choice to make) → open the modal instead.
+    const matches = candidates.filter(c => String(c.productId) === String(info.hintId));
+    if (matches.length !== 1) { if (btn) btn.textContent = '📌 Pin'; return openPinModal(anchor, card); }
+
+    const chosen = matches[0];
+    enqueuePin({
+      device: device.name, part: partKey, grade: getGrade() || (CONFIG && CONFIG.grade) || '',
+      productId: chosen.productId, variantId: chosen.variantId,
+      title: chosen.title, price: chosen.price, url: chosen.url,
+    }, btn);
   }
 
   // Modal: auto-detects device + part from the tile, lists the EXACT product/variant options
@@ -809,7 +908,7 @@
           <button id="ppp-pull">▶ Pull pinned prices (${host})</button>
           <button id="ppp-abort" class="sec">■ Abort</button>
           <button id="ppp-open" class="sec">🔗 Open pricing site</button>
-          <button id="ppp-settings" class="sec">⚙ Settings (site URL + key)</button>
+          <button id="ppp-settings" class="sec">⚙ Settings (site URL + login)</button>
           <div id="ppp-status">Idle. Site: ${SITE.key}</div>
           <details id="ppp-debugbox">
             <summary>🐛 Debug</summary>
@@ -853,14 +952,16 @@
       el.querySelector('#ppp-debugbox').open = true; debug('Capturing…'); captureSearch(q.trim(), debug);
     };
     el.querySelector('#ppp-info').onclick = () => {
-      const u = getUrl(), k = getKey();
+      const u = getUrl(), user = getUser();
       debug(
         'Script version: ' + SCRIPT_VERSION + '\n' +
         'Supplier: ' + SITE.key + ' (' + host + ')\n' +
         'Pricing site: ' + (u || '(none)') + '\n' +
-        'Ingest key: ' + (k ? 'set, ' + k.length + ' chars, ends …' + k.slice(-4) : '⚠ NOT SET') + '\n' +
+        'Username: ' + (user || '⚠ NOT SET') + '\n' +
+        'Passcode: ' + (getPass() ? 'set (' + getPass().length + ' chars)' : '⚠ NOT SET') + '\n' +
+        'Session: ' + (getSession() ? 'active' : 'none yet — signs in on first call') + '\n' +
         'Grade for new pins: ' + (getGrade() || '(site default)') + '\n' +
-        'Endpoints: GET /api/config · POST /api/ingest · POST/DELETE /api/pins'
+        'Endpoints: POST /api/login · GET /api/config · POST /api/ingest · POST/DELETE /api/pins'
       );
     };
     el.querySelector('#ppp-copy').onclick = () => {
@@ -874,14 +975,21 @@
     el.querySelector('#ppp-settings').onclick = () => {
       const u = prompt('Pricing site URL (root, no trailing path):', getUrl());
       if (u === null) return;
-      const k = prompt('Ingest key (matches INGEST_KEY in the site\'s .env):', getKey());
-      if (k === null) return;
+      const user = prompt('Username (your pricing-site login, e.g. SOSPhonerepairs):', getUser());
+      if (user === null) return;
+      const pass = prompt('Passcode (your pricing-site login passcode):', getPass());
+      if (pass === null) return;
       const cleanUrl = cleanSiteUrl(u);
       GM_setValue('siteUrl', cleanUrl);
-      GM_setValue('ingestKey', k.trim());
+      GM_setValue('username', user.trim());
+      GM_setValue('passcode', pass);
+      GM_setValue('session', '');   // force a fresh sign-in with the new details
       CONFIG = null;
-      status(cleanUrl && k.trim() ? 'Saved: ' + cleanUrl : '⚠ Not configured');
-      loadGrade();
+      if (!isConfigured()) { status('⚠ Not configured'); return; }
+      status('Saved — signing in to ' + cleanUrl + ' …');
+      login()
+        .then(() => { status('✅ Signed in to ' + cleanUrl); loadGrade(); })
+        .catch(e => status('❌ ' + e.message));
     };
 
     // The grade is a LOCAL choice: it decides which per-grade column a pin lands in.
@@ -892,7 +1000,7 @@
     };
 
     function loadGrade() {
-      if (!getUrl() || !getKey()) { status('⚠ Not configured — click ⚙ Settings'); return; }
+      if (!isConfigured()) { status('⚠ Not configured — click ⚙ Settings'); return; }
       getConfig().then(c => {
         if (!c || c.error) return status('⚠ ' + ((c && c.error) || 'no config'));
         CONFIG = c;

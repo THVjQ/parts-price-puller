@@ -86,18 +86,31 @@ function checkLogin(username, password) {
   return same(String(username || '').trim().toLowerCase(), USERNAME.toLowerCase()) && same(password, PASSWORD);
 }
 
+// The Tampermonkey userscript can't use the login cookie (SameSite=Lax + HttpOnly won't
+// travel on its cross-site calls), so it sends the same signed token in an X-PPP-Session
+// header (Authorization: Bearer <token> is also accepted). Verified exactly like the cookie.
+function bearerToken(req) {
+  const h = req.headers['x-ppp-session'];
+  if (h) return String(h);
+  const m = String(req.headers['authorization'] || '').match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : '';
+}
+
 function isLoggedIn(req) {
   if (MODE === 'none') return true;
   // Cloudflare Access terminates auth upstream; it always sets this JWT header.
   if (MODE === 'cf-access') return Boolean(req.headers['cf-access-jwt-assertion'] || req.headers['cf-access-authenticated-user-email']);
-  return Boolean(verify(readCookie(req, COOKIE)));
+  return Boolean(verify(readCookie(req, COOKIE)) || verify(bearerToken(req)));
 }
 
+// Sets the browser session cookie and returns the raw token, so /api/login can also hand
+// it back in the JSON body for the userscript's header auth.
 function setSession(req, res) {
   const token = sign({ exp: Date.now() + TTL_MS });
   res.setHeader('Set-Cookie',
     `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(TTL_MS / 1000)}` +
     (useSecure(req) ? '; Secure' : ''));
+  return token;
 }
 function clearSession(req, res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` + (useSecure(req) ? '; Secure' : ''));
