@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.4.0
+// @version      2.5.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,7 +22,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.4.0';
+  const SCRIPT_VERSION = '2.5.0';
   const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
@@ -530,17 +530,20 @@
       btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
       btn.title = 'Pin this product to a price cell';
       btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); quickPin(a, card); });
-      // Capture phase + stopImmediatePropagation: fires before any site contextmenu handler;
-      // ensureConfig() pre-loads the device/part list so dropdowns are ready when modal opens.
-      btn.addEventListener('contextmenu', async ev => {
-        ev.preventDefault(); ev.stopImmediatePropagation();
-        await ensureConfig().catch(() => {});
-        openPinModal(a, card);
-      }, true);
-      // Warm the search cache while the pointer is on the button, so the click feels instant.
+      // Use mousedown(button=2) to open the modal — mousedown fires BEFORE contextmenu, so
+      // page-level contextmenu interception (common on product image pages) can't block it.
+      btn.addEventListener('mousedown', ev => {
+        if (ev.button !== 2) return;
+        ev.preventDefault(); ev.stopPropagation();
+        ensureConfig().catch(() => {}).then(() => openPinModal(a, card));
+      });
+      // Still suppress the browser's own context menu on the pin button.
+      btn.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); }, true);
+      // Warm the search cache AND config while the pointer is on the button.
       let preTimer;
       btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => {
-        if (prefetchBusy) return;                      // one prefetch at a time — no burst
+        ensureConfig().catch(() => {});              // pre-load config so modal opens instantly
+        if (prefetchBusy) return;                   // one search prefetch at a time
         const t = tileInfo(a, card).title;
         if (!t) return;
         prefetchBusy = true;
@@ -907,8 +910,10 @@
         .ppp-modal-x{cursor:pointer}
         .ppp-modal-bd{padding:12px}
         .ppp-modal-bd label{display:block;margin:8px 0 2px;color:#888}
-        .ppp-modal-bd select{width:100%;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;
-          border-radius:4px;padding:5px;font:inherit}
+        .ppp-modal-bd select{width:100%!important;background:#1a1a2e!important;color:#e0e0e0!important;
+          border:1px solid #0f3460!important;border-radius:4px!important;padding:5px!important;
+          font:inherit!important;opacity:1!important;visibility:visible!important;display:block!important;
+          -webkit-appearance:auto!important;appearance:auto!important}
         .ppp-seed{color:#a0c4ff;margin-bottom:4px;word-break:break-word}
         .ppp-seed-row{display:flex;gap:6px}
         .ppp-m-seed{flex:1;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;
