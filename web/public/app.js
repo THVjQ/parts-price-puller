@@ -97,10 +97,29 @@
     render();
   }
 
-  const retailFor = (price, group, part) => {
+  // Retail for a cell: a per-store manual override wins over the calculated figure.
+  // deviceName is optional (the calculator preview passes hypothetical costs, no device).
+  function retailInfo(price, group, partKey, deviceName) {
     const s = store();
-    return s ? PPPCalc.computeRetail(price, s.calculator, group, part) : null;
-  };
+    if (!s) return { value: null, fixed: false };
+    if (deviceName) {
+      const g = (partMeta(partKey).graded) ? state.grade : '';
+      const ov = s.retailOverrides ? s.retailOverrides[deviceName + '|' + partKey + '|' + g] : undefined;
+      if (ov != null) return { value: ov, fixed: true };
+    }
+    return { value: PPPCalc.computeRetail(price, s.calculator, group, partKey), fixed: false };
+  }
+  const retailFor = (price, group, part, device) => retailInfo(price, group, part, device).value;
+
+  // 4-week trend → a green(cheaper)↔red(dearer) wash, intensity by magnitude. Capped so
+  // even a huge swing stays legible. Manual cells are left clean (blue), no wash.
+  function applyTrend(td, price, ref) {
+    if (ref == null || !(ref > 0) || price === ref) return;
+    const pct = Math.max(-0.5, Math.min(0.5, (price - ref) / ref)) / 0.5;   // -1 … 1
+    const alpha = (Math.abs(pct) * 0.5).toFixed(3);
+    td.style.background = `rgba(var(${pct > 0 ? '--trend-up' : '--trend-down'}), ${alpha})`;
+    td.classList.add(pct > 0 ? 'up' : 'down');
+  }
 
   // Which families actually have devices, in config order. This drives the right rail.
   function activeGroups() {
@@ -172,24 +191,28 @@
         td.dataset.part = k;
         td.dataset.group = row.group;
 
-        if (c.price == null) {
+        const ri = retailInfo(c.price, row.group, k, row.device);
+        // A cell can be "empty" of wholesale yet still carry a fixed retail override.
+        if (c.price == null && ri.value == null) {
           td.classList.add('empty');
           td.textContent = c.ts ? '—' : '';
           if (c.ts) td.dataset.miss = '1';
         } else {
-          const retail = retailFor(c.price, row.group, k);
-          if (c.prev != null && c.prev !== c.price) td.classList.add(c.price > c.prev ? 'up' : 'down');
           if (c.manual) td.classList.add('manual');
+          else if (c.price != null) applyTrend(td, c.price, c.ref4w);   // 4-week wash
+          if (ri.fixed) td.classList.add('retail-fixed');
           if (c.pinned) td.classList.add('pinned');
 
+          const wSpan = () => el('span', 'w', c.price == null ? '—' : money(c.price));
+          const rSpan = () => el('span', 'r', money(ri.value));
           if (view === 'wholesale') {
-            td.appendChild(el('span', 'w', money(c.price)));
+            td.appendChild(wSpan());
           } else if (view === 'retail') {
-            td.appendChild(el('span', 'r', money(retail)));
+            td.appendChild(rSpan());
           } else {
             td.classList.add('both');
-            td.appendChild(el('span', 'w', money(c.price)));
-            td.appendChild(el('span', 'r', money(retail)));
+            td.appendChild(wSpan());
+            td.appendChild(rSpan());
           }
         }
         tr.appendChild(td);
@@ -259,36 +282,45 @@
     const dl = el('dl');
     const add = (k, v, isNode) => { dl.appendChild(el('dt', null, k)); const dd = el('dd'); if (isNode) dd.appendChild(v); else dd.textContent = v; dl.appendChild(dd); };
 
-    if (c.price == null) {
+    const ri = retailInfo(c.price, td.dataset.group, part.key, td.dataset.device);
+    if (c.price == null && ri.value == null) {
       add('Status', c.ts ? 'No match on the last pull' : 'Never pulled');
       if (c.title) add('Query', c.title);
     } else {
-      add(c.manual ? 'Manual price' : 'Wholesale', money(c.price) + ' ex GST');
-      if (s) {
-        const retail = retailFor(c.price, td.dataset.group, part.key);
-        const margin = PPPCalc.marginPercent(c.price, retail, state.gstPercent);
-        add('Retail (' + s.name + ')', money(retail) + (margin != null ? '  ·  ' + margin + '% margin' : ''));
-        const rule = PPPCalc.resolveRule(s.calculator, td.dataset.group, part.key);
-        add('Rule', PPPCalc.describeRule(rule, state.currency));
+      if (c.price != null) add(c.manual ? 'Manual price' : 'Wholesale', money(c.price) + ' ex GST');
+      if (s && ri.value != null) {
+        const margin = c.price != null ? PPPCalc.marginPercent(c.price, ri.value, state.gstPercent) : null;
+        add('Retail (' + s.name + ')', money(ri.value) + (ri.fixed ? '  ·  fixed by hand' : (margin != null ? '  ·  ' + margin + '% margin' : '')));
+        if (!ri.fixed && c.price != null) {
+          const rule = PPPCalc.resolveRule(s.calculator, td.dataset.group, part.key);
+          add('Rule', PPPCalc.describeRule(rule, state.currency));
+        }
       }
-      if (c.prev != null && c.prev !== c.price) {
-        const diff = c.price - c.prev;
-        add('Change', (diff > 0 ? '+' : '') + money(diff) + ' vs ' + money(c.prev));
+      // 4-week trend (what drives the cell colour)
+      if (c.price != null && c.ref4w != null && c.ref4w !== c.price) {
+        const diff = c.price - c.ref4w;
+        const pct = Math.round((diff / c.ref4w) * 100);
+        add('4-week change', (diff > 0 ? '▲ +' : '▼ −') + money(Math.abs(diff)) + '  (' + (pct > 0 ? '+' : '') + pct + '%, was ' + money(c.ref4w) + ')');
+      } else if (c.price != null && c.ref4w == null) {
+        add('4-week change', 'no data yet');
       }
-      add('Source', c.manual ? 'Entered by hand — pulls never overwrite it'
-        : ((d.sources.find(x => x.key === c.source) || {}).label || c.source));
-      if (c.alt && c.alt.length) add('Also', c.alt.map(a => a.source + ' ' + money(a.price)).join(', '));
-      if (c.pinned) add('Pin', 'Pinned to one exact product (Setup Mode)');
-      add(c.manual ? 'Set' : 'Pulled', ago(c.ts));
-      if (c.url) {
-        const a = el('a', null, 'Open product page');
-        a.href = c.url; a.target = '_blank'; a.rel = 'noopener';
-        add('Link', a, true);
+      if (ri.fixed && c.price == null) add('Note', 'Retail set by hand; no wholesale on record');
+      if (c.price != null) {
+        add('Source', c.manual ? 'Entered by hand — pulls never overwrite it'
+          : ((d.sources.find(x => x.key === c.source) || {}).label || c.source));
+        if (c.alt && c.alt.length) add('Also', c.alt.map(a => a.source + ' ' + money(a.price)).join(', '));
+        if (c.pinned) add('Pin', 'Pinned to one exact product (Setup Mode)');
+        add(c.manual ? 'Set' : 'Pulled', ago(c.ts));
+        if (c.url) {
+          const a = el('a', null, 'Open product page');
+          a.href = c.url; a.target = '_blank'; a.rel = 'noopener';
+          add('Link', a, true);
+        }
       }
     }
     pop.appendChild(dl);
     if (c.title && c.price != null && !c.manual) pop.appendChild(el('p', 'title', c.title));
-    pop.appendChild(el('p', 'title', 'Right-click for manual price'));
+    pop.appendChild(el('p', 'title', 'Right-click to set wholesale or retail'));
 
     place(pop, td);
   }
@@ -333,11 +365,15 @@
       return b;
     };
 
-    item(c.manual ? '✏ Edit manual price' : '✏ Edit price (set manually)', '', () => showEditor(td, c));
+    const hasStore = Boolean(store());
+    const retailFixed = retailInfo(c.price, td.dataset.group, td.dataset.part, td.dataset.device).fixed;
+    item(c.manual ? '✏ Edit wholesale price' : '✏ Set wholesale price', '', () => showEditor(td, c, 'wholesale'));
+    if (hasStore) item(retailFixed ? '✏ Edit retail price' : '✏ Set retail price', '', () => showEditor(td, c, 'retail'));
     if (c.manual) {
-      item('↩ Clear manual price', 'danger', async () => {
-        await saveManual(td, null);
-      });
+      item('↩ Clear wholesale price', 'danger', async () => { await saveManual(td, null, 'wholesale'); });
+    }
+    if (retailFixed) {
+      item('↩ Clear retail price', 'danger', async () => { await saveManual(td, null, 'retail'); });
     }
     if (c.url) {
       item('🔗 Open product page', '', () => { window.open(c.url, '_blank', 'noopener'); closeMenu(); });
@@ -360,25 +396,36 @@
     place(menu, td);
   }
 
-  function showEditor(td, c) {
+  // kind: 'wholesale' = a MANUAL cost (feeds every store's calculator);
+  //       'retail'    = a fixed retail figure for the current store only.
+  function showEditor(td, c, kind) {
     const part = state.data.parts.find(p => p.key === td.dataset.part);
+    const isRetail = kind === 'retail';
     menu.innerHTML = '';
     menu.appendChild(el('div', 'menu-hd', td.dataset.device + ' — ' + part.label));
 
     const wrap = el('div', 'menu-edit');
+    wrap.appendChild(el('div', 'menu-kind', isRetail
+      ? 'Fixed RETAIL for ' + store().name + ' — overrides the calculator'
+      : 'WHOLESALE cost — every store’s retail is worked out from it'));
+
     const input = el('input');
     input.type = 'number'; input.step = '0.01'; input.min = '0';
-    input.value = c.price == null ? '' : c.price;
-    input.placeholder = 'wholesale cost, ex GST';
+    const cur = isRetail ? retailInfo(c.price, td.dataset.group, td.dataset.part, td.dataset.device) : null;
+    input.value = isRetail ? (cur.fixed ? cur.value : '') : (c.manual && c.price != null ? c.price : '');
+    input.placeholder = isRetail ? 'retail price, inc GST' : 'wholesale cost, ex GST';
     wrap.appendChild(input);
 
     const preview = el('div', 'menu-preview');
     const updatePreview = () => {
       const v = Number(input.value);
-      const s = store();
-      preview.textContent = !s
-        ? 'Pick a store to preview retail'
-        : (v > 0 ? 'Retail: ' + money(retailFor(v, td.dataset.group, part.key)) : '');
+      if (isRetail) {
+        preview.textContent = v > 0 ? 'Sells for ' + money(v) : '';
+      } else {
+        const s = store();
+        preview.textContent = !s ? 'Pick a store to preview retail'
+          : (v > 0 ? 'Retail: ' + money(retailFor(v, td.dataset.group, part.key)) : '');
+      }
     };
     input.addEventListener('input', updatePreview);
     updatePreview();
@@ -390,7 +437,7 @@
       const v = Number(input.value);
       if (!(v > 0)) { preview.textContent = 'Enter a price above 0.'; return; }
       save.disabled = true; save.textContent = 'Saving…';
-      await saveManual(td, v);
+      await saveManual(td, v, kind);
     };
     const cancel = el('button', 'btn ghost small', 'Cancel');
     cancel.onclick = closeMenu;
@@ -407,15 +454,21 @@
     });
   }
 
-  async function saveManual(td, price) {
+  async function saveManual(td, price, kind) {
     try {
       await api('POST', '/api/manual', {
         device: td.dataset.device,
         part: td.dataset.part,
         grade: state.grade,
+        kind: kind || 'wholesale',
+        store: state.storeId,
         price,
       });
       closeMenu();
+      if (kind === 'retail') {
+        // Overrides live on the store payload — refresh it so the change shows at once.
+        await loadStores();
+      }
       await loadMatrix();
     } catch (e) {
       alert('Could not save: ' + e.message);
@@ -423,12 +476,12 @@
   }
 
   // ───────────────────────────────────────────── calculator drawer
-  const drawer = $('#drawer'), scrim = $('#scrim'), statusDrawer = $('#statusDrawer');
+  const drawer = $('#drawer'), scrim = $('#scrim'), statusDrawer = $('#statusDrawer'), devicesDrawer = $('#devicesDrawer');
   let draft = null;          // calculator being edited
   let draftGroup = null;     // device group tab currently shown
 
   function openDrawer(node) { node.hidden = false; scrim.hidden = false; }
-  function closeDrawers() { drawer.hidden = true; statusDrawer.hidden = true; scrim.hidden = true; }
+  function closeDrawers() { drawer.hidden = true; statusDrawer.hidden = true; devicesDrawer.hidden = true; scrim.hidden = true; }
 
   function openCalc() {
     const s = store();
@@ -597,6 +650,46 @@
     } catch (e) { $('#logBody').textContent = e.message; }
   }
 
+  // ───────────────────────────────────────────── devices drawer
+  async function openDevices() {
+    const gsel = $('#ndGroup');
+    if (!gsel.options.length) {
+      state.data.groups.forEach(g => gsel.add(new Option(g.label, g.id)));
+    }
+    if (state.family) gsel.value = state.family;
+    $('#ndMsg').textContent = '';
+    openDrawer(devicesDrawer);
+    await refreshCustomList();
+  }
+
+  async function refreshCustomList() {
+    const box = $('#customList');
+    box.textContent = 'Loading…';
+    try {
+      const r = await api('GET', '/api/devices');
+      const groupLabel = id => (state.data.groups.find(g => g.id === id) || {}).label || id;
+      box.innerHTML = '';
+      if (!r.devices.length) { box.appendChild(el('div', 'none', 'None yet — add one above.')); return; }
+      r.devices.forEach(d => {
+        const row = el('div', 'drow');
+        const left = el('div');
+        left.appendChild(el('div', null, d.name));
+        left.appendChild(el('div', 'meta', groupLabel(d.grp)));
+        row.appendChild(left);
+        const del = el('button', null, '✕');
+        del.title = 'Remove ' + d.name;
+        del.onclick = async () => {
+          if (!confirm('Remove ' + d.name + '? Any prices/pins on it stay in history but the row goes.')) return;
+          await api('DELETE', '/api/devices/' + d.id);
+          await refreshCustomList();
+          await loadMatrix();
+        };
+        row.appendChild(del);
+        box.appendChild(row);
+      });
+    } catch (e) { box.textContent = e.message; }
+  }
+
   async function checkBanner() {
     try {
       const s = await api('GET', '/api/status');
@@ -664,9 +757,27 @@
 
   $('#calcBtn').onclick = openCalc;
   $('#statusBtn').onclick = openStatus;
+  $('#devicesBtn').onclick = openDevices;
   $('#drawerClose').onclick = closeDrawers;
   $('#statusClose').onclick = closeDrawers;
+  $('#devicesClose').onclick = closeDrawers;
   scrim.onclick = closeDrawers;
+
+  $('#ndAdd').onclick = async () => {
+    const name = $('#ndName').value.trim();
+    const msg = $('#ndMsg');
+    if (!name) { msg.textContent = 'Enter a name.'; return; }
+    try {
+      await api('POST', '/api/devices', { name, group: $('#ndGroup').value, search: $('#ndSearch').value.trim() });
+      $('#ndName').value = ''; $('#ndSearch').value = '';
+      msg.textContent = '✓ Added ' + name;
+      state.family = $('#ndGroup').value;   // jump to the family it landed in
+      localStorage.setItem('ppp.family', state.family);
+      await refreshCustomList();
+      await loadMatrix();
+    } catch (e) { msg.textContent = '✗ ' + e.message; }
+  };
+  $('#ndName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ndAdd').click(); });
 
   ['#roundMode', '#roundStep', '#endsWith'].forEach(sel => {
     $(sel).addEventListener('change', readRounding);

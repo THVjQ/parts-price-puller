@@ -48,6 +48,7 @@
       <span>&nbsp;</span>
       <div class="btnrow">
         <button id="calcBtn" class="btn" title="Edit this store's markup / labour / rounding">Calculator</button>
+        <button id="devicesBtn" class="btn ghost" title="Add or remove devices">Devices</button>
         <button id="statusBtn" class="btn ghost" title="System status, logs, config">Status</button>
         <button id="logoutBtn" class="btn ghost" title="Log out">Exit</button>
       </div>
@@ -77,8 +78,7 @@
   <span id="gitline"></span>
   <span class="spacer"></span>
   <span class="legend">
-    <i class="sw down"></i> cheaper than last pull
-    <i class="sw up"></i> dearer
+    <span class="trend-legend"><i class="grad"></i> cheaper ← 4 wk → dearer</span>
     <i class="sw pin"></i> pinned
     <i class="sw man"></i> manual
   </span>
@@ -176,6 +176,26 @@
     <fieldset>
       <legend>Recent activity</legend>
       <div id="logBody" class="logs">…</div>
+    </fieldset>
+  </div>
+</aside>
+
+<!-- add / remove devices -->
+<aside id="devicesDrawer" class="drawer" hidden>
+  <div class="drawer-hd"><strong>Devices</strong><button class="x" id="devicesClose" aria-label="Close">✕</button></div>
+  <div class="drawer-bd">
+    <fieldset>
+      <legend>Add a device</legend>
+      <label class="row"><span>Name</span><input id="ndName" type="text" placeholder="e.g. iPhone 17e" autocomplete="off"></label>
+      <label class="row"><span>Family</span><select id="ndGroup"></select></label>
+      <label class="row"><span>Search term</span><input id="ndSearch" type="text" placeholder="(optional) defaults to the name" autocomplete="off"></label>
+      <button class="btn" id="ndAdd">Add device</button>
+      <p class="hint" id="ndMsg"></p>
+    </fieldset>
+    <fieldset>
+      <legend>Added devices</legend>
+      <p class="hint">The built-in list lives in <code>config/devices.yml</code>. Devices you add here are stored separately and survive updates — remove them any time.</p>
+      <div id="customList" class="devlist">…</div>
     </fieldset>
   </div>
 </aside>

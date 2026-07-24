@@ -139,22 +139,33 @@ LCD** (it's the `parts: [DIGI, LCD]` line on the iPad group in `config/devices.y
 give any family its own column set, add the same `parts:` list to its group.
 
 **Left-click** any cell for its source, matched product title, product link, timestamp,
-which rule priced it, what the other supplier quoted, and the change since the last pull.
-Cells tint **green** when the price dropped and **red** when it rose; an amber dot means
-the cell is pinned; a red bar means the price was entered by hand.
+which rule priced it, and its 4-week movement. Cells carry a **colour wash on a
+green↔red spectrum** showing how the price has moved over the **last 4 weeks** — deeper
+green = bigger drop, deeper red = bigger rise. An amber dot means the cell is pinned; a
+**blue** bar means the price was entered by hand (blue, so it can't be mistaken for a red
+"dearer" cell).
+
+**Add a device** any time from the **Devices** button — name, family, optional search
+term. These live in the database (not `config/devices.yml`), so they survive updates and
+you can remove them from the same panel. The built-in list still comes from git.
 
 Bookmarkable: `?store=lismore&view=both&grade=AMP&q=iphone%2013` — handy for sending a
 store straight to their own retail column. Add `#calc` to open the calculator too.
 
 ### Manual prices — right-click → Edit
 
-Right-click a cell, then click **✏ Edit price**. Two deliberate steps, so a price can
-never be nudged by a stray click. Type the cost, see the retail figure update live, Save.
+Right-click a cell (two deliberate steps, so nothing gets nudged). You can set either:
 
-A manual price **outranks every supplier price and no pull will ever overwrite it** — the
-scraper and the userscript keep writing their own numbers underneath (you can still see
-them in the cell popover under "Also"), but the cell shows yours until you right-click →
-**↩ Clear manual price**, which drops it back to the live cheapest price.
+- **Wholesale** — a cost that **outranks every supplier price and no pull overwrites it**.
+  Every store's retail is worked out from it by the calculator. Store-agnostic.
+- **Retail** — a fixed retail figure for **the store you have selected** (retail depends
+  on that store's calculator, so it can't be shared). Overrides the calculated retail for
+  that one cell; other stores are unaffected. The retail figure shows with a dotted
+  underline so you know it's pinned, not calculated.
+
+Either one is cleared from the same right-click menu (**↩ Clear …**), dropping the cell
+back to the live/calculated price. Supplier pulls keep writing underneath a manual
+wholesale price — you can see them in the popover under "Also".
 
 The same menu is where you **📌 Unpin this cell** (amber dot = pinned). Setup Mode can
 re-point a pin but never remove one, and there's no Pins tab any more — this is it. The

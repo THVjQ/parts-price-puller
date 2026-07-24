@@ -30,7 +30,9 @@ devices:
   - { name: iPhone 6 Plus,     group: iphone }
   - { name: iPhone 6s,         group: iphone }
   - { name: iPhone 6s Plus,    group: iphone }
-  - { name: "iPhone SE (2016/2020/2022)", search: "iPhone SE", group: iphone, aliases: ["se 2020", "se 2022", "se2"] }
+  - { name: "iPhone SE (2016)",   search: "iPhone SE 2016", group: iphone, aliases: ["se 1", "se 1st gen"] }
+  - { name: "iPhone SE 2 (2020)", search: "iPhone SE 2020", group: iphone, aliases: ["se2", "se 2nd gen"] }
+  - { name: "iPhone SE 3 (2022)", search: "iPhone SE 2022", group: iphone, aliases: ["se3", "se 3rd gen"] }
   - { name: iPhone 7,          group: iphone }
   - { name: iPhone 7 Plus,     group: iphone }
   - { name: iPhone 8,          group: iphone }
@@ -62,6 +64,11 @@ devices:
   - { name: iPhone 16 Plus,    group: iphone }
   - { name: iPhone 16 Pro,     group: iphone }
   - { name: iPhone 16 Pro Max, group: iphone }
+  - { name: iPhone 16e,        group: iphone }
+  - { name: iPhone 17,         group: iphone }
+  - { name: iPhone 17 Air,     group: iphone }
+  - { name: iPhone 17 Pro,     group: iphone }
+  - { name: iPhone 17 Pro Max, group: iphone }
 
   # ── Samsung Galaxy S ──────────────────────────────────────────────────────
   - { name: Samsung S8,        group: samsung-s }
@@ -93,6 +100,11 @@ devices:
   - { name: Samsung S25,       group: samsung-s }
   - { name: Samsung S25 Plus,  group: samsung-s }
   - { name: Samsung S25 Ultra, group: samsung-s }
+  - { name: Samsung S25 Edge,  group: samsung-s }
+  - { name: Samsung S25 FE,    group: samsung-s }
+  - { name: Samsung S26,       group: samsung-s }
+  - { name: Samsung S26 Plus,  group: samsung-s }
+  - { name: Samsung S26 Ultra, group: samsung-s }
 
   # ── Samsung Galaxy A ──────────────────────────────────────────────────────
   - { name: Samsung A05,  group: samsung-a }
@@ -125,6 +137,9 @@ devices:
   - { name: Samsung A71,  group: samsung-a }
   - { name: Samsung A72,  group: samsung-a }
   - { name: Samsung A73,  group: samsung-a }
+  - { name: Samsung A26,  group: samsung-a }
+  - { name: Samsung A36,  group: samsung-a }
+  - { name: Samsung A56,  group: samsung-a }
 
   # ── Samsung Galaxy Z (Fold / Flip) ────────────────────────────────────────
   - { name: Samsung Z Flip,   search: "Galaxy Z Flip",   group: samsung-z }
@@ -154,9 +169,13 @@ devices:
   - { name: Pixel 8,        search: "Google Pixel 8",        group: google }
   - { name: Pixel 8 Pro,    search: "Google Pixel 8 Pro",    group: google }
   - { name: Pixel 8a,       search: "Google Pixel 8a",       group: google }
-  - { name: Pixel 9,        search: "Google Pixel 9",        group: google }
-  - { name: Pixel 9 Pro,    search: "Google Pixel 9 Pro",    group: google }
-  - { name: Pixel 9 Pro XL, search: "Google Pixel 9 Pro XL", group: google }
+  - { name: Pixel 9,          search: "Google Pixel 9",          group: google }
+  - { name: Pixel 9 Pro,      search: "Google Pixel 9 Pro",      group: google }
+  - { name: Pixel 9 Pro XL,   search: "Google Pixel 9 Pro XL",   group: google }
+  - { name: Pixel 9a,         search: "Google Pixel 9a",         group: google }
+  - { name: Pixel 10,         search: "Google Pixel 10",         group: google }
+  - { name: Pixel 10 Pro,     search: "Google Pixel 10 Pro",     group: google }
+  - { name: Pixel 10 Pro XL,  search: "Google Pixel 10 Pro XL",  group: google }
 
   # ── iPad (LCD + Digitiser only — see the ipad group in `groups` above) ──────
   - { name: iPad 5 (2017),      search: "iPad 5",           group: ipad }
@@ -165,13 +184,17 @@ devices:
   - { name: iPad 8 (2020),      search: "iPad 8",           group: ipad }
   - { name: iPad 9 (2021),      search: "iPad 9",           group: ipad }
   - { name: iPad 10 (2022),     search: "iPad 10",          group: ipad }
+  - { name: iPad 11 (2025),     search: "iPad 11",          group: ipad }
   - { name: iPad Air 2,         search: "iPad Air 2",       group: ipad }
   - { name: iPad Air 3,         search: "iPad Air 3",       group: ipad }
   - { name: iPad Air 4,         search: "iPad Air 4",       group: ipad }
   - { name: iPad Air 5,         search: "iPad Air 5",       group: ipad }
+  - { name: iPad Air 11 (M2),   search: "iPad Air 11 M2",   group: ipad }
+  - { name: iPad Air 13 (M2),   search: "iPad Air 13 M2",   group: ipad }
   - { name: iPad Mini 4,        search: "iPad Mini 4",      group: ipad }
   - { name: iPad Mini 5,        search: "iPad Mini 5",      group: ipad }
   - { name: iPad Mini 6,        search: "iPad Mini 6",      group: ipad }
+  - { name: iPad Mini 7,        search: "iPad Mini 7",      group: ipad }
   - { name: iPad Pro 9.7,       search: "iPad Pro 9.7",     group: ipad }
   - { name: iPad Pro 10.5,      search: "iPad Pro 10.5",    group: ipad }
   - { name: iPad Pro 11 (2018), search: "iPad Pro 11 2018", group: ipad }
@@ -180,3 +203,5 @@ devices:
   - { name: iPad Pro 12.9 (2018), search: "iPad Pro 12.9 2018", group: ipad }
   - { name: iPad Pro 12.9 (2020), search: "iPad Pro 12.9 2020", group: ipad }
   - { name: iPad Pro 12.9 (2021), search: "iPad Pro 12.9 2021", group: ipad }
+  - { name: iPad Pro 11 (M4),     search: "iPad Pro 11 M4",     group: ipad }
+  - { name: iPad Pro 13 (M4),     search: "iPad Pro 13 M4",     group: ipad }

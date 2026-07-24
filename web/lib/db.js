@@ -63,6 +63,30 @@ CREATE TABLE IF NOT EXISTS prefs (
   updated_at TEXT NOT NULL
 );
 
+-- A retail price a human pinned for ONE store (retail depends on the store's calculator,
+-- so unlike a manual wholesale price this is per store). Wins over the calculated retail.
+CREATE TABLE IF NOT EXISTS manual_retail (
+  store   TEXT NOT NULL,
+  device  TEXT NOT NULL,
+  part    TEXT NOT NULL,
+  grade   TEXT NOT NULL DEFAULT '',
+  price   REAL NOT NULL,
+  ts      TEXT NOT NULL,
+  PRIMARY KEY (store, device, part, grade)
+);
+
+-- Devices added from the website's Edit menu. Merged with the git-defined devices at
+-- read time, so they survive a git pull and never need a YAML edit.
+CREATE TABLE IF NOT EXISTS custom_devices (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  name     TEXT NOT NULL UNIQUE,
+  search   TEXT NOT NULL DEFAULT '',
+  grp      TEXT NOT NULL DEFAULT 'other',
+  aliases  TEXT NOT NULL DEFAULT '',
+  enabled  INTEGER NOT NULL DEFAULT 1,
+  ts       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS logs (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   ts      TEXT NOT NULL,
@@ -107,6 +131,25 @@ function latestByCell(grade) {
     const e = out.get(k) || {};
     if (r.rn === 1) Object.assign(e, r); else e.prev = r.price;
     out.set(k, e);
+  }
+  return out;
+}
+
+// The price each cell/source was at, as of a cutoff (used for the 4-week trend colour):
+// the newest row that is NOT newer than the cutoff.
+const asOfStmt = db.prepare(`
+  WITH ranked AS (
+    SELECT device, part, grade, source, price,
+           ROW_NUMBER() OVER (PARTITION BY device, part, grade, source ORDER BY id DESC) AS rn
+    FROM prices
+    WHERE (grade = @grade OR grade = '') AND ts <= @cutoff AND price IS NOT NULL
+  )
+  SELECT device, part, grade, source, price FROM ranked WHERE rn = 1
+`);
+function priceAsOf(grade, cutoffISO) {
+  const out = new Map();   // "device|part|source" → price
+  for (const r of asOfStmt.all({ grade, cutoff: cutoffISO })) {
+    out.set(`${r.device}|${r.part}|${r.source}`, r.price);
   }
   return out;
 }
@@ -179,6 +222,25 @@ const setPrefStmt = db.prepare(`
   ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at
 `);
 
+// ─────────────────────────────────────────────────────────── manual retail
+const setManualRetailStmt = db.prepare(`
+  INSERT INTO manual_retail (store, device, part, grade, price, ts)
+  VALUES (@store, @device, @part, @grade, @price, @ts)
+  ON CONFLICT (store, device, part, grade) DO UPDATE SET price = excluded.price, ts = excluded.ts
+`);
+const clearManualRetailStmt = db.prepare(`DELETE FROM manual_retail WHERE store=? AND device=? AND part=? AND grade=?`);
+const listManualRetailStmt = db.prepare(`SELECT * FROM manual_retail WHERE store = ?`);
+
+// ─────────────────────────────────────────────────────── custom devices
+const addCustomDeviceStmt = db.prepare(`
+  INSERT INTO custom_devices (name, search, grp, aliases, enabled, ts)
+  VALUES (@name, @search, @grp, @aliases, 1, @ts)
+  ON CONFLICT (name) DO UPDATE SET search=excluded.search, grp=excluded.grp, aliases=excluded.aliases, enabled=1
+`);
+const listCustomDevicesStmt = db.prepare(`SELECT * FROM custom_devices ORDER BY id`);
+const deleteCustomDeviceStmt = db.prepare(`DELETE FROM custom_devices WHERE id = ?`);
+const setCustomDeviceEnabledStmt = db.prepare(`UPDATE custom_devices SET enabled = ? WHERE id = ?`);
+
 // ─────────────────────────────────────────────────────────────── logs
 const insertLogStmt = db.prepare(`INSERT INTO logs (ts, origin, source, message) VALUES (?, ?, ?, ?)`);
 const listLogsStmt  = db.prepare(`SELECT * FROM logs ORDER BY id DESC LIMIT ?`);
@@ -205,6 +267,14 @@ module.exports = {
   resetCalculator: id => resetCalcStmt.run(nowIso(), id).changes,
   getPref: (k, fallback) => { const r = getPrefStmt.get(k); try { return r ? JSON.parse(r.v) : fallback; } catch (e) { return fallback; } },
   setPref: (k, v) => setPrefStmt.run(k, JSON.stringify(v), nowIso()),
+  priceAsOf,
+  setManualRetail: r => setManualRetailStmt.run(r),
+  clearManualRetail: (store, d, p, g) => clearManualRetailStmt.run(store, d, p, g).changes,
+  listManualRetail: store => listManualRetailStmt.all(store),
+  addCustomDevice: r => addCustomDeviceStmt.run(r),
+  listCustomDevices: () => listCustomDevicesStmt.all(),
+  deleteCustomDevice: id => deleteCustomDeviceStmt.run(id).changes,
+  setCustomDeviceEnabled: (id, on) => setCustomDeviceEnabledStmt.run(on ? 1 : 0, id).changes,
   log,
   listLogs: n => listLogsStmt.all(n || 200),
   pruneLogs: n => pruneLogsStmt.run(n || 2000).changes,

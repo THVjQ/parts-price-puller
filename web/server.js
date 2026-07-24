@@ -54,11 +54,32 @@ function requireSession(req, res, next) {
   res.redirect('/login');
 }
 
+// Effective device list = git-defined (config/devices.yml) + ones added from the site's
+// Edit menu (DB). Built fresh each call so a just-added device shows up immediately.
+// A DB device with the same name as a git one is ignored (git wins).
+function effectiveDevices(cfg) {
+  const known = new Set(cfg.devices.map(d => d.name.toLowerCase()));
+  const groupIds = new Set(cfg.groups.map(g => g.id));
+  const custom = db.listCustomDevices()
+    .filter(d => !known.has(d.name.toLowerCase()))
+    .map(d => ({
+      name: d.name,
+      search: d.search || d.name,
+      group: groupIds.has(d.grp) ? d.grp : 'other',
+      aliases: d.aliases ? d.aliases.split(';').map(s => s.trim()).filter(Boolean) : [],
+      enabled: d.enabled === 1,
+      custom: true,
+      id: d.id,
+    }));
+  return cfg.devices.concat(custom);
+}
+
 // Case-insensitive device lookup so "iphone 12 pro" from a scraper still lands on the
-// canonical row name. Rebuilt whenever the config reloads.
+// canonical row name. Rebuilt whenever the config reloads or a custom device changes.
 let deviceIndex = new Map(), partIndex = new Map();
 function reindex(cfg) {
-  deviceIndex = new Map(cfg.devices.map(d => [d.name.toLowerCase(), d]));
+  cfg = cfg || config.get();
+  deviceIndex = new Map(effectiveDevices(cfg).map(d => [d.name.toLowerCase(), d]));
   partIndex = new Map(cfg.parts.map(p => [p.key.toUpperCase(), p]));
 }
 config.onChange(cfg => { reindex(cfg); db.seedStores(cfg.storeSeeds); });
@@ -141,7 +162,7 @@ app.get('/api/config', requireKeyOrSession, (req, res) => {
     scheduleHour: cfg.schedule.hour,
     rateLimitMs: cfg.pull.rateLimitMs,
     maxResults: cfg.pull.maxResults,
-    devices: cfg.devices.filter(d => d.enabled),
+    devices: effectiveDevices(cfg).filter(d => d.enabled),
     parts: cfg.parts.map(p => p.key),
     partLabels: cfg.parts.map(p => ({ key: p.key, label: p.label, graded: p.graded })),
     queries: cfg.parts.map(p => ({
@@ -258,9 +279,12 @@ app.delete('/api/pins', requireKeyOrSession, (req, res) => {
 
 // ───────────────────────────────────────────────────────── manual prices
 /**
- * A price a human typed in (right-click a cell → Edit). Stored as its own source, and
- * the matrix always prefers it over anything a supplier quoted — so a pull can never
- * bump it. Sending price: null clears it and the cell falls back to the live price.
+ * A price a human typed in (right-click a cell → Edit). Two kinds:
+ *   kind:'wholesale' (default) — a MANUAL cost that wins over every supplier and feeds
+ *      the calculator, so every store's retail follows from it. Store-agnostic.
+ *   kind:'retail' — a fixed RETAIL figure for ONE store (retail depends on that store's
+ *      calculator, so it can't be shared). Overrides the calculated retail for that cell.
+ * price:null clears whichever kind was set.
  */
 app.post('/api/manual', requireSession, (req, res) => {
   const cfg = config.get();
@@ -272,6 +296,16 @@ app.post('/api/manual', requireSession, (req, res) => {
   const grade = gradeFor(part.key, b.grade, cfg);
   const raw = b.price === '' || b.price == null ? null : Number(b.price);
   const price = Number.isFinite(raw) && raw > 0 ? raw : null;
+  const kind = b.kind === 'retail' ? 'retail' : 'wholesale';
+
+  if (kind === 'retail') {
+    const store = db.getStore(clean(b.store));
+    if (!store) return res.status(400).json({ error: 'a store must be selected to set a retail price' });
+    if (price == null) db.clearManualRetail(store.id, device.name, part.key, grade);
+    else db.setManualRetail({ store: store.id, device: device.name, part: part.key, grade, price, ts: nowIso() });
+    db.log('web', 'MANUAL', `${price == null ? 'Cleared' : 'Set'} retail ${device.name}/${part.key} @ ${store.name}${price == null ? '' : ' = ' + price}`);
+    return res.json({ ok: true, price, kind });
+  }
 
   db.insertPrices([{
     device: device.name, part: part.key, grade, source: 'MANUAL',
@@ -283,7 +317,36 @@ app.post('/api/manual', requireSession, (req, res) => {
     ts: nowIso(),
   }]);
   db.log('web', 'MANUAL', `${price == null ? 'Cleared' : 'Set'} ${device.name} / ${part.key}${grade ? ' [' + grade + ']' : ''}${price == null ? '' : ' = ' + price}`);
-  res.json({ ok: true, price });
+  res.json({ ok: true, price, kind });
+});
+
+// ───────────────────────────────────────────────────────── custom devices
+app.get('/api/devices', requireSession, (req, res) => {
+  res.json({ devices: db.listCustomDevices() });
+});
+
+app.post('/api/devices', requireSession, (req, res) => {
+  const cfg = config.get();
+  const b = req.body || {};
+  const name = clean(b.name).slice(0, 60);
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (deviceIndex.has(name.toLowerCase())) return res.status(409).json({ error: 'a device with that name already exists' });
+  const groupIds = new Set(cfg.groups.map(g => g.id));
+  const grp = groupIds.has(clean(b.group)) ? clean(b.group) : 'other';
+  db.addCustomDevice({
+    name, search: clean(b.search) || name, grp,
+    aliases: clean(b.aliases).slice(0, 200), ts: nowIso(),
+  });
+  reindex(cfg);
+  db.log('web', '', `Added device ${name} (${grp})`);
+  res.json({ ok: true, devices: db.listCustomDevices() });
+});
+
+app.delete('/api/devices/:id', requireSession, (req, res) => {
+  db.deleteCustomDevice(Number(req.params.id));
+  reindex();
+  db.log('web', '', `Removed custom device #${req.params.id}`);
+  res.json({ ok: true, devices: db.listCustomDevices() });
 });
 
 // ───────────────────────────────────────────────────────── prefs
@@ -310,7 +373,11 @@ function storeOut(row) {
   let calculator;
   try { calculator = config.normaliseCalculator(JSON.parse(row.calculator_json)); }
   catch (e) { calculator = config.normaliseCalculator({}); }
-  return { id: row.id, name: row.name, calculator, edited: row.edited === 1, updatedAt: row.updated_at };
+  // Per-store retail overrides travel with the store so the browser can apply them the
+  // instant you switch store, without another round trip.
+  const retailOverrides = {};
+  for (const r of db.listManualRetail(row.id)) retailOverrides[`${r.device}|${r.part}|${r.grade}`] = r.price;
+  return { id: row.id, name: row.name, calculator, retailOverrides, edited: row.edited === 1, updatedAt: row.updated_at };
 }
 
 app.get('/api/stores', requireKeyOrSession, (req, res) => {
@@ -349,6 +416,9 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
   const sourceKeys = cfg.sources.filter(s => s.enabled).map(s => s.key);
 
   const pinned = new Set(db.listPins().map(p => `${p.device}|${p.part}`));
+  // Reference price for the trend colour: what the winning source was at ~4 weeks ago.
+  const TREND_DAYS = 28;
+  const asOf = db.priceAsOf(grade, new Date(Date.now() - TREND_DAYS * 86400000).toISOString());
 
   // Each family shows only its own columns (iPad = LCD + Digitiser, phones = the full
   // set, …). Compute cells for a device's applicable parts only.
@@ -356,7 +426,7 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
   const colsByGroup = new Map(cfg.groups.map(g => [g.id, g.parts]));
   const allKeys = cfg.parts.map(p => p.key);
 
-  const rows = cfg.devices.filter(d => d.enabled).map(d => {
+  const rows = effectiveDevices(cfg).filter(d => d.enabled).map(d => {
     const cells = {};
     const keys = colsByGroup.get(d.group) || allKeys;
     for (const part of keys.map(k => partByKey.get(k)).filter(Boolean)) {
@@ -375,10 +445,11 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
       const best = manual || offers[0] || null;
       // A cell that was searched but matched nothing still deserves a tooltip saying so.
       const miss = best ? null : (latest.get(`${d.name}|${part.key}|${sourceKeys[0]}`) || null);
+      const ref4w = best ? (asOf.get(`${d.name}|${part.key}|${best.source}`) ?? null) : null;
       cells[part.key] = best
         ? {
             price: best.price, source: best.source, url: best.url, title: best.title,
-            ts: best.ts, prev: best.prev, manual: Boolean(manual),
+            ts: best.ts, prev: best.prev, ref4w, manual: Boolean(manual),
             alt: offers.filter(o => o !== best).map(o => ({ source: o.source, price: o.price })),
             pinned: pinned.has(`${d.name}|${part.key}`),
           }
@@ -394,10 +465,15 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
   const store = req.query.store ? db.getStore(clean(req.query.store)) : null;
   if (store) {
     const c = storeOut(store).calculator;
+    // Per-store retail overrides (right-click → Edit → Retail) win over the calculation.
+    const overrides = new Map(db.listManualRetail(store.id).map(r => [`${r.device}|${r.part}|${r.grade}`, r.price]));
     for (const row of rows) {
       for (const key of Object.keys(row.cells)) {
         const cell = row.cells[key];
-        cell.retail = cell.price == null ? null : calc.computeRetail(cell.price, c, row.group, key);
+        const g = partByKey.get(key) && partByKey.get(key).graded ? grade : '';
+        const ov = overrides.get(`${row.device}|${key}|${g}`);
+        if (ov != null) { cell.retail = ov; cell.retailManual = true; }
+        else cell.retail = cell.price == null ? null : calc.computeRetail(cell.price, c, row.group, key);
       }
     }
   }
