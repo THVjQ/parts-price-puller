@@ -293,6 +293,7 @@ td.cell.down .w { color: var(--down); }
 td.cell.manual { box-shadow: inset 3px 0 0 var(--manual); }
 td.cell.manual .w { color: var(--manual); }
 /* A pinned RETAIL override: mark the retail figure so it's obvious it isn't calculated. */
+td.cell.retail-fixed { box-shadow: inset 3px 0 0 var(--manual); }
 td.cell.retail-fixed .r { text-decoration: underline dotted var(--manual); text-underline-offset: 3px; }
 /* Source-specific pin dot (top-right corner, colour by supplier) */
 td.cell[class*="pinned-"]::after {
@@ -491,7 +492,7 @@ body.login { align-items: center; justify-content: center; background: var(--hea
   border-radius: var(--radius); transition: color .15s; flex-shrink: 0;
 }
 #storePinBtn:hover { color: var(--pin-cp); }
-#storePinBtn.active { color: var(--pin-cp); }
+#storePinBtn.active { background: var(--pin-cp); color: #fff; border-radius: var(--radius); }
 
 /* ───────────────────────────── price edit input — blue left bar for both kinds */
 .menu-edit input[type="number"] {
@@ -516,8 +517,26 @@ body.login { align-items: center; justify-content: center; background: var(--hea
 .sw.flag-warn-sw    { background: var(--flag-warning); border-radius: 50%; }
 
 /* flag menu items — slightly dimmed, not full danger colour */
-.menu-item.flag-item { color: var(--muted); }
-.menu-item.flag-item:hover { color: var(--text); }
+.menu-flag-hd {
+  padding: 4px 12px 2px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); background: var(--accent);
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.menu-flag-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; cursor: pointer; font-size: 13px; user-select: none;
+}
+.menu-flag-row:hover { background: color-mix(in srgb, var(--brand) 12%, transparent); }
+.menu-flag-row input[type="checkbox"] {
+  width: 15px; height: 15px; accent-color: var(--brand);
+  cursor: pointer; flex-shrink: 0;
+}
+.flag-note-edit {
+  margin-left: auto; background: none; border: 0;
+  color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px;
+}
+.flag-note-edit:hover { color: var(--text); }
 
 /* popover flags section */
 .pop-flags-hd {
@@ -532,17 +551,20 @@ body.login { align-items: center; justify-content: center; background: var(--hea
 .pop-flag.flag-text-warning     .flag-label { color: var(--flag-warning); }
 
 /* ───────────────────────────── quote mode */
-#quoteBtn.on { background: var(--manual); color: #fff; border-color: var(--manual); }
 td.cell.quote-sel { outline: 2px solid var(--manual); outline-offset: -2px; z-index: 2; }
 
 .quote-panel {
-  position: fixed; bottom: 0; left: 0; right: 0;
+  position: fixed;
+  width: 290px;
   background: var(--panel);
+  border: 1px solid var(--line-strong);
   border-top: 2px solid var(--manual);
-  box-shadow: 0 -6px 24px rgba(0,0,0,.18);
+  box-shadow: 0 6px 24px rgba(0,0,0,.22);
   z-index: 55;
   font-size: 13px;
-  max-height: 320px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  max-height: 420px;
   display: flex;
   flex-direction: column;
 }

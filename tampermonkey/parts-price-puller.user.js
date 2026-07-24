@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.2.0
+// @version      2.3.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -528,6 +528,7 @@
       btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
       btn.title = 'Pin this product to a price cell';
       btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); quickPin(a, card); });
+      btn.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
       // Warm the search cache while the pointer is on the button, so the click feels instant.
       let preTimer;
       btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => {
@@ -736,13 +737,18 @@
     // Serve config from cache for an instant modal — only hit the network if we don't have it
     // yet (Setup Mode + the panel both prefetch it, so this is usually already warm).
     if (!(CONFIG && CONFIG.devices && CONFIG.devices.length && (CONFIG.partLabels || CONFIG.parts))) {
-      try { const c = await getConfig(); if (c && !c.error) CONFIG = c; } catch (e) { /* keep any cached */ }
+      statusEl.textContent = '⏳ Loading config from site…';
+      try { const c = await getConfig(); if (c && !c.error) CONFIG = c; } catch (e) { statusEl.textContent = '❌ Could not reach site: ' + e.message + ' — check ⚙ Settings URL and that you are logged in.'; }
       if (!pinModalEl) return; // user closed it while we awaited
     }
     const devices = (CONFIG && CONFIG.devices) || [];
     const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
     if (!devices.length || !parts.length) {
-      statusEl.textContent = '⚠ Config empty — check ⚙ Settings, and that config/devices.yml + parts.yml loaded on the site (Status panel).';
+      statusEl.textContent = '⚠ Device/part list empty. Open ⚙ Settings and verify the Site URL points to your pricing site, then try again.';
+      devSel.add(new Option('— configure site URL in ⚙ Settings —', ''));
+      partSel.add(new Option('— configure site URL in ⚙ Settings —', ''));
+    } else if (statusEl.textContent.startsWith('⏳')) {
+      statusEl.textContent = '';
     }
     const activeGrade = getGrade() || (CONFIG && CONFIG.grade) || '';
     devices.forEach(d => devSel.add(new Option(d.name, d.name)));

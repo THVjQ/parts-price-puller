@@ -24,8 +24,7 @@
     family: qs.get('family') || localStorage.getItem('ppp.family') || '',   // active device tab
     currency: '$',
     gstPercent: 10,
-    // Quote mode
-    quoteActive: false,
+    // Quote mode (activated by Shift+click on any cell)
     quoteItems:  [],
     quoteEnd:    null,
     quoteTimer:  null,
@@ -285,8 +284,8 @@
       b.title = needsStore && !has ? 'Pick a store first' : '';
       b.classList.toggle('on', b.dataset.view === (has ? state.view : 'wholesale'));
     });
-    $('#calcBtn').disabled = !has;
-    $('#calcBtn').title = has ? 'Edit this store’s calculator' : 'Pick a store first';
+    $('#calcBtn').disabled = false;
+    $('#calcBtn').title = has ? "Edit this store's markup / labour / rounding" : 'Edit the global calculator (used by all stores by default)';
   }
 
   // ───────────────────────────────────────────── cell popover (left click)
@@ -424,13 +423,35 @@
       item('🔗 Open product page', '', () => { window.open(c.url, '_blank', 'noopener'); closeMenu(); });
     }
 
-    // Flag options — compat, micro-soldering, warning (apply across ALL stores)
+    // Flag checkboxes — compat, micro-soldering, warning (cross-store)
     const flagKey = td.dataset.device + '|' + td.dataset.part;
     const existingFlags = (state.data.flags && state.data.flags[flagKey]) || [];
-    const hasFlag = f => existingFlags.some(x => x.flag === f);
-    item((hasFlag('compat') ? '⚠ Edit' : '⚠ Mark') + ' compatibility issue', 'flag-item', () => showFlagEditor(td, 'compat'));
-    item((hasFlag('microsolder') ? '🔩 Edit' : '🔩 Mark') + ' micro-soldering needed', 'flag-item', () => showFlagEditor(td, 'microsolder'));
-    item((hasFlag('warning') ? '! Edit' : '! Add') + ' warning note', 'flag-item', () => showFlagEditor(td, 'warning'));
+    menu.appendChild(el('div', 'menu-flag-hd', 'Cell flags — all stores'));
+    [
+      { key: 'compat',      label: '⚠ Compatibility issue' },
+      { key: 'microsolder', label: '🔩 Micro-soldering needed' },
+      { key: 'warning',     label: '! Warning note' },
+    ].forEach(f => {
+      const currentFlag = existingFlags.find(x => x.flag === f.key);
+      const row = el('label', 'menu-flag-row');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = Boolean(currentFlag);
+      cb.addEventListener('change', async () => {
+        try {
+          if (cb.checked) await api('POST', '/api/flags', { device: td.dataset.device, part: td.dataset.part, flag: f.key, note: '' });
+          else await api('DELETE', '/api/flags', { device: td.dataset.device, part: td.dataset.part, flag: f.key });
+          closeMenu(); await loadMatrix();
+        } catch (e) { cb.checked = !cb.checked; }
+      });
+      row.appendChild(cb);
+      row.appendChild(el('span', null, f.label));
+      const editBtn = el('button', 'flag-note-edit', '✎');
+      editBtn.title = currentFlag && currentFlag.note ? 'Note: ' + currentFlag.note : 'Add a note';
+      editBtn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); showFlagEditor(td, f.key); });
+      row.appendChild(editBtn);
+      menu.appendChild(row);
+    });
 
     // The only way to drop a pin — Setup Mode can re-pin a cell but never unbind one,
     // and the sheet's Pins tab (where you used to delete the row) is gone.
@@ -461,7 +482,7 @@
     const wrap = el('div', 'menu-edit');
     wrap.appendChild(el('div', 'menu-kind', isRetail
       ? 'Fixed RETAIL for ' + store().name + ' — overrides the calculator'
-      : 'WHOLESALE cost — every store’s retail is worked out from it'));
+      : "WHOLESALE cost — every store's retail is worked out from it"));
 
     const input = el('input');
     input.type = 'number'; input.step = '0.01'; input.min = '0';
@@ -586,28 +607,26 @@
   const drawer = $('#drawer'), scrim = $('#scrim'), statusDrawer = $('#statusDrawer'), devicesDrawer = $('#devicesDrawer');
   let draft = null;          // calculator being edited
   let draftGroup = null;     // device group tab currently shown
+  let editingGlobal = false; // true when editing the global calc (no store selected)
 
   function openDrawer(node) { node.hidden = false; scrim.hidden = false; }
-  function closeDrawers() { drawer.hidden = true; statusDrawer.hidden = true; devicesDrawer.hidden = true; scrim.hidden = true; }
-
-  // ───────────────────────────────────────────── quote mode
-  // Select multiple cells across the same (or any) device, build a quick price estimate.
-  // The quote auto-expires 30 minutes after the first cell is added.
-
-  function enterQuote() {
-    state.quoteActive = true;
-    $('#quoteBtn').classList.add('on');
-    $('#quotePanel').hidden = false;
-    renderQuotePanel();
+  function closeDrawers() {
+    drawer.hidden = true; statusDrawer.hidden = true; devicesDrawer.hidden = true; scrim.hidden = true;
+    const rb = $('#resetCalc');
+    if (rb) { rb.textContent = 'Reset to git defaults'; rb.title = 'Discard saved edits and use config/stores.yml again'; }
   }
 
+  // ───────────────────────────────────────────── quote mode
+  // Shift+click any cell to add it to the quote. The panel floats to the right of the
+  // selection. Auto-expires 30 minutes after the first cell is added.
+
   function exitQuote() {
-    state.quoteActive = false;
     state.quoteItems = [];
     if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
     state.quoteEnd = null;
-    $('#quoteBtn').classList.remove('on');
-    $('#quotePanel').hidden = true;
+    const panel = document.getElementById('quotePanel');
+    if (panel) panel.hidden = true;
+    document.getElementById('quoteTimer').textContent = '30:00';
     document.querySelectorAll('td.cell.quote-sel').forEach(t => t.classList.remove('quote-sel'));
   }
 
@@ -619,6 +638,7 @@
     if (idx >= 0) {
       state.quoteItems.splice(idx, 1);
       td.classList.remove('quote-sel');
+      if (!state.quoteItems.length) { exitQuote(); return; }
     } else {
       if (!state.quoteEnd) {
         state.quoteEnd = Date.now() + 30 * 60 * 1000;
@@ -637,6 +657,31 @@
       td.classList.add('quote-sel');
     }
     renderQuotePanel();
+    positionQuotePanel();
+  }
+
+  function positionQuotePanel() {
+    const panel = document.getElementById('quotePanel');
+    if (!panel || !state.quoteItems.length) return;
+    panel.hidden = false;
+    const panelW = 290, margin = 8;
+    const matrix = document.getElementById('matrix');
+    let left;
+    if (matrix) {
+      const mr = matrix.getBoundingClientRect();
+      left = mr.right + margin;
+    }
+    if (!left || left + panelW > window.innerWidth - margin) {
+      left = window.innerWidth - panelW - margin;
+    }
+    const selCells = document.querySelectorAll('td.cell.quote-sel');
+    let top = 80;
+    if (selCells.length) {
+      const r = selCells[0].getBoundingClientRect();
+      top = Math.max(60, Math.min(r.top, window.innerHeight - 400));
+    }
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
   }
 
   function tickQuoteTimer() {
@@ -677,6 +722,7 @@
         const cellTd = document.querySelector(`td.cell[data-device="${item.device}"][data-part="${item.part}"]`);
         if (cellTd) cellTd.classList.remove('quote-sel');
         state.quoteItems.splice(idx, 1);
+        if (!state.quoteItems.length) { exitQuote(); return; }
         renderQuotePanel();
       };
       const delTd = el('td');
@@ -688,6 +734,7 @@
     });
     document.getElementById('quoteTotalOrig').textContent = totalOrig > 0 ? money(totalOrig) : '—';
     document.getElementById('quoteTotalNew').textContent = totalNew > 0 ? money(totalNew) : '—';
+    positionQuotePanel();
   }
 
   function refreshQuoteTotals() {
@@ -698,20 +745,42 @@
 
   function openCalc() {
     const s = store();
-    if (!s) return;
-    draft = JSON.parse(JSON.stringify(s.calculator));
-    draft.rules = draft.rules || {};
+    editingGlobal = !s;
     draftGroup = draftGroup || (state.data.groups[0] && state.data.groups[0].id) || '*';
-    $('#drawerTitle').textContent = 'Calculator — ' + s.name;
-    $('#drawerHint').textContent = s.edited
-      ? 'Saved for this store on ' + new Date(s.updatedAt).toLocaleDateString() + '. Git deploys never touch it.'
-      : 'Currently using the seed from config/stores.yml. Saving makes it this store’s own.';
-    $('#roundMode').value = draft.rounding.mode;
-    $('#roundStep').value = draft.rounding.step;
-    $('#endsWith').value = draft.rounding.endsWith == null ? '' : String(draft.rounding.endsWith);
-    renderGroupTabs();
-    renderRules();
-    openDrawer(drawer);
+
+    function applyDraft(d, title, hint, resetLabel) {
+      draft = JSON.parse(JSON.stringify(d));
+      draft.rules = draft.rules || {};
+      $('#drawerTitle').textContent = title;
+      $('#drawerHint').textContent = hint;
+      const rb = $('#resetCalc');
+      if (rb && resetLabel) { rb.textContent = resetLabel[0]; rb.title = resetLabel[1]; }
+      $('#roundMode').value = draft.rounding.mode;
+      $('#roundStep').value = draft.rounding.step;
+      $('#endsWith').value = draft.rounding.endsWith == null ? '' : String(draft.rounding.endsWith);
+      renderGroupTabs();
+      renderRules();
+      openDrawer(drawer);
+    }
+
+    if (s) {
+      applyDraft(s.calculator,
+        'Calculator — ' + s.name,
+        s.edited
+          ? 'Saved for this store on ' + new Date(s.updatedAt).toLocaleDateString() + '. Git deploys never touch it.'
+          : "Currently using the seed from config/stores.yml. Saving makes it this store's own.",
+        null
+      );
+    } else {
+      api('GET', '/api/global-calc').then(r => {
+        const seed = { rounding: { mode: 'up', step: 10, endsWith: null }, rules: { '*|*': { multiplyPercent: 110, add: 90, threshold: 250, overMultiplyPercent: 110, overAdd: 150 } } };
+        applyDraft(r.calculator || seed,
+          'Global Calculator',
+          'Default markup for all stores. Any store can override their own — but until they do, this drives their retail.',
+          ['Clear global calculator', 'Remove the global calculator — stores fall back to their git-seeded values']
+        );
+      }).catch(e => alert('Could not load global calculator: ' + e.message));
+    }
   }
 
   function renderGroupTabs() {
@@ -955,7 +1024,7 @@
   $('#body').onclick = e => {
     const td = e.target.closest('td.cell');
     closeMenu();
-    if (state.quoteActive && td) { quoteClickCell(td); e.stopPropagation(); return; }
+    if (e.shiftKey && td) { quoteClickCell(td); e.stopPropagation(); return; }
     if (!td || (td.classList.contains('empty') && !td.dataset.miss)) return closePop();
     openPop(td);
     e.stopPropagation();
@@ -972,18 +1041,10 @@
     if (!pop.hidden && !pop.contains(e.target)) closePop();
     if (!menu.hidden && !menu.contains(e.target)) closeMenu();
   });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); closeMenu(); closeDrawers(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); closeMenu(); closeDrawers(); exitQuote(); } });
 
   $('#calcBtn').onclick = openCalc;
-  $('#quoteBtn').onclick = () => { if (state.quoteActive) exitQuote(); else enterQuote(); };
-  $('#quoteClearBtn').onclick = () => {
-    document.querySelectorAll('td.cell.quote-sel').forEach(t => t.classList.remove('quote-sel'));
-    state.quoteItems = [];
-    state.quoteEnd = null;
-    if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
-    document.getElementById('quoteTimer').textContent = '30:00';
-    renderQuotePanel();
-  };
+  $('#quoteClearBtn').onclick = exitQuote;
   $('#quoteCloseBtn').onclick = exitQuote;
   $('#statusBtn').onclick = openStatus;
   $('#devicesBtn').onclick = openDevices;
@@ -1018,10 +1079,15 @@
     const btn = $('#saveCalc');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      const r = await api('PUT', '/api/stores/' + encodeURIComponent(state.storeId) + '/calculator', draft);
-      const i = state.stores.findIndex(s => s.id === r.store.id);
-      state.stores[i] = r.store;
-      draft = JSON.parse(JSON.stringify(r.store.calculator));
+      if (editingGlobal) {
+        await api('PUT', '/api/global-calc', draft);
+        await loadStores();
+      } else {
+        const r = await api('PUT', '/api/stores/' + encodeURIComponent(state.storeId) + '/calculator', draft);
+        const i = state.stores.findIndex(s => s.id === r.store.id);
+        state.stores[i] = r.store;
+        draft = JSON.parse(JSON.stringify(r.store.calculator));
+      }
       render();
       btn.textContent = 'Saved ✓';
       setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 1200);
@@ -1032,7 +1098,16 @@
   };
 
   $('#resetCalc').onclick = async () => {
-    if (!confirm('Discard this store’s saved calculator and go back to the values in config/stores.yml?')) return;
+    if (editingGlobal) {
+      if (!confirm('Clear the global calculator? All stores will fall back to their git-seeded values.')) return;
+      await api('DELETE', '/api/global-calc');
+      await loadStores();
+      draft = { rounding: { mode: 'up', step: 10, endsWith: null }, rules: {} };
+      renderRules();
+      render();
+      return;
+    }
+    if (!confirm("Discard this store's saved calculator and go back to the values in config/stores.yml?")) return;
     const r = await api('DELETE', '/api/stores/' + encodeURIComponent(state.storeId) + '/calculator');
     const i = state.stores.findIndex(s => s.id === r.store.id);
     state.stores[i] = r.store;
@@ -1073,7 +1148,7 @@
       await loadStores();
       await loadMatrix();
       checkBanner();
-      if (location.hash === '#calc' && store()) openCalc();
+      if (location.hash === '#calc') openCalc();
     } catch (e) {
       $('#body').innerHTML = '';
       $('#body').appendChild(el('tr')).appendChild(el('td', 'loading', 'Could not load: ' + e.message));

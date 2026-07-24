@@ -408,6 +408,11 @@ function storeOut(row) {
   let calculator;
   try { calculator = config.normaliseCalculator(JSON.parse(row.calculator_json)); }
   catch (e) { calculator = config.normaliseCalculator({}); }
+  // Unedited stores inherit the global calculator when it's set.
+  if (row.edited !== 1) {
+    const gc = db.getPref('global_calc', null);
+    if (gc) try { calculator = config.normaliseCalculator(gc); } catch (e) { /* malformed pref — ignore */ }
+  }
   // Per-store retail overrides travel with the store so the browser can apply them the
   // instant you switch store, without another round trip.
   const retailOverrides = {};
@@ -426,6 +431,25 @@ app.put('/api/stores/:id/calculator', requireSession, (req, res) => {
   db.saveCalculator(row.id, calculator);
   db.log('web', '', `Calculator saved for ${row.name}`);
   res.json({ ok: true, store: storeOut(db.getStore(row.id)) });
+});
+
+// ── Global calculator: default markup inherited by all unedited stores ────────
+app.get('/api/global-calc', requireKeyOrSession, (req, res) => {
+  const gc = db.getPref('global_calc', null);
+  res.json({ calculator: gc ? config.normaliseCalculator(gc) : null });
+});
+
+app.put('/api/global-calc', requireSession, (req, res) => {
+  const calculator = config.normaliseCalculator(req.body || {});
+  db.setPref('global_calc', calculator);
+  db.log('web', '', 'Global calculator saved');
+  res.json({ ok: true, calculator });
+});
+
+app.delete('/api/global-calc', requireSession, (req, res) => {
+  db.setPref('global_calc', null);
+  db.log('web', '', 'Global calculator cleared (stores fall back to git seeds)');
+  res.json({ ok: true });
 });
 
 // Back to whatever config/stores.yml currently says.
