@@ -57,6 +57,14 @@ function requireSession(req, res, next) {
 // Effective device list = git-defined (config/devices.yml) + ones added from the site's
 // Edit menu (DB). Built fresh each call so a just-added device shows up immediately.
 // A DB device with the same name as a git one is ignored (git wins).
+function effectiveParts(cfg) {
+  const knownKeys = new Set(cfg.parts.map(p => p.key.toLowerCase()));
+  const custom = db.listCustomParts()
+    .filter(p => !knownKeys.has(p.key.toLowerCase()))
+    .map(p => ({ key: p.key, label: p.label, graded: false, custom: true, id: p.id }));
+  return cfg.parts.concat(custom);
+}
+
 function effectiveDevices(cfg) {
   const known = new Set(cfg.devices.map(d => d.name.toLowerCase()));
   const groupIds = new Set(cfg.groups.map(g => g.id));
@@ -80,7 +88,7 @@ let deviceIndex = new Map(), partIndex = new Map();
 function reindex(cfg) {
   cfg = cfg || config.get();
   deviceIndex = new Map(effectiveDevices(cfg).map(d => [d.name.toLowerCase(), d]));
-  partIndex = new Map(cfg.parts.map(p => [p.key.toUpperCase(), p]));
+  partIndex = new Map(effectiveParts(cfg).map(p => [p.key.toUpperCase(), p]));
 }
 config.onChange(cfg => { reindex(cfg); db.seedStores(cfg.storeSeeds); });
 
@@ -165,8 +173,8 @@ app.get('/api/config', requireKeyOrSession, (req, res) => {
     rateLimitMs: cfg.pull.rateLimitMs,
     maxResults: cfg.pull.maxResults,
     devices: effectiveDevices(cfg).filter(d => d.enabled),
-    parts: cfg.parts.map(p => p.key),
-    partLabels: cfg.parts.map(p => ({ key: p.key, label: p.label, graded: p.graded })),
+    parts: effectiveParts(cfg).map(p => p.key),
+    partLabels: effectiveParts(cfg).map(p => ({ key: p.key, label: p.label, graded: p.graded || false })),
     queries: cfg.parts.map(p => ({
       part: p.key,
       template: p.query,
@@ -384,6 +392,59 @@ app.delete('/api/devices/:id', requireSession, (req, res) => {
   res.json({ ok: true, devices: db.listCustomDevices() });
 });
 
+// ───────────────────────────────────────────────────────── custom parts (columns)
+app.get('/api/parts', requireSession, (req, res) => {
+  res.json({ parts: db.listCustomParts() });
+});
+
+app.post('/api/parts', requireSession, (req, res) => {
+  const b = req.body || {};
+  const label = clean(b.label).slice(0, 60);
+  if (!label) return res.status(400).json({ error: 'label is required' });
+  const key = (clean(b.key) || label.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')).slice(0, 40);
+  if (!key) return res.status(400).json({ error: 'invalid key' });
+  const cfg = config.get();
+  if (cfg.parts.some(p => p.key.toLowerCase() === key.toLowerCase())) {
+    return res.status(409).json({ error: 'conflicts with a built-in column key' });
+  }
+  try {
+    db.addCustomPart({ key, label, query: clean(b.query) || '', ts: nowIso() });
+    reindex();
+    db.log('web', '', `Custom column added: ${key} (${label})`);
+    res.json({ ok: true, parts: db.listCustomParts() });
+  } catch (e) {
+    if (e.message.includes('UNIQUE')) return res.status(409).json({ error: 'a column with that key already exists' });
+    throw e;
+  }
+});
+
+app.delete('/api/parts/:id', requireSession, (req, res) => {
+  const n = db.deleteCustomPart(Number(req.params.id));
+  if (!n) return res.status(404).json({ error: 'not found' });
+  reindex();
+  db.log('web', '', `Custom column removed: id ${req.params.id}`);
+  res.json({ ok: true, parts: db.listCustomParts() });
+});
+
+// ─────────────────────────────────────── device + column ordering (saved in prefs)
+app.put('/api/device-order', requireSession, (req, res) => {
+  const { family, order } = req.body || {};
+  if (!family || !Array.isArray(order)) return res.status(400).json({ error: 'family and order[] required' });
+  const current = db.getPref('device_order', {});
+  current[String(family)] = order.map(String);
+  db.setPref('device_order', current);
+  res.json({ ok: true });
+});
+
+app.put('/api/column-order', requireSession, (req, res) => {
+  const { family, order } = req.body || {};
+  if (!family || !Array.isArray(order)) return res.status(400).json({ error: 'family and order[] required' });
+  const current = db.getPref('column_order', {});
+  current[String(family)] = order.map(String);
+  db.setPref('column_order', current);
+  res.json({ ok: true });
+});
+
 // ───────────────────────────────────────────────────────── prefs
 // One shared login, so "which store am I" belongs on the server — log in anywhere and
 // the site comes back the way you left it.
@@ -481,12 +542,52 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
   const asOf = db.priceAsOf(grade, new Date(Date.now() - TREND_DAYS * 86400000).toISOString());
 
   // Each family shows only its own columns (iPad = LCD + Digitiser, phones = the full
-  // set, …). Compute cells for a device's applicable parts only.
-  const partByKey = new Map(cfg.parts.map(p => [p.key, p]));
-  const colsByGroup = new Map(cfg.groups.map(g => [g.id, g.parts]));
-  const allKeys = cfg.parts.map(p => p.key);
+  // set, …). Custom parts appear in every family; stored column order applied per-family.
+  const allParts = effectiveParts(cfg);
+  const partByKey = new Map(allParts.map(p => [p.key, p]));
+  const customPartKeys = new Set(db.listCustomParts().map(p => p.key));
+  const columnOrderPref = db.getPref('column_order', {});
+  const deviceOrderPref = db.getPref('device_order', {});
 
-  const rows = effectiveDevices(cfg).filter(d => d.enabled).map(d => {
+  // Build ordered groups: git columns + custom, then apply stored ordering
+  const groups = cfg.groups.map(g => {
+    const gitCols = g.parts || allParts.map(p => p.key);
+    const extra = allParts.filter(p => customPartKeys.has(p.key) && !gitCols.includes(p.key)).map(p => p.key);
+    let cols = [...gitCols, ...extra];
+    const storedOrder = columnOrderPref[g.id];
+    if (storedOrder && storedOrder.length) {
+      const orderMap = new Map(storedOrder.map((k, i) => [k, i]));
+      const defaultIdx = new Map(cols.map((k, i) => [k, i]));
+      cols = [...cols].sort((a, b) => {
+        const ai = orderMap.has(a) ? orderMap.get(a) : 10000 + (defaultIdx.get(a) || 0);
+        const bi = orderMap.has(b) ? orderMap.get(b) : 10000 + (defaultIdx.get(b) || 0);
+        return ai - bi;
+      });
+    }
+    return { ...g, parts: cols };
+  });
+
+  const colsByGroup = new Map(groups.map(g => [g.id, g.parts]));
+  const allKeys = allParts.map(p => p.key);
+
+  // Sort devices within each family by stored order
+  const origDevices = effectiveDevices(cfg).filter(d => d.enabled);
+  const origIdx = new Map(origDevices.map((d, i) => [d.name, i]));
+  const groupOrder = new Map(cfg.groups.map((g, i) => [g.id, i]));
+  const devices = [...origDevices].sort((a, b) => {
+    const ga = groupOrder.has(a.group) ? groupOrder.get(a.group) : 9999;
+    const gb = groupOrder.has(b.group) ? groupOrder.get(b.group) : 9999;
+    if (ga !== gb) return ga - gb;
+    const ao = deviceOrderPref[a.group] || [];
+    const ai = ao.indexOf(a.name);
+    const bi = ao.indexOf(b.name);
+    if (ai === -1 && bi === -1) return origIdx.get(a.name) - origIdx.get(b.name);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+
+  const rows = devices.map(d => {
     const cells = {};
     const keys = colsByGroup.get(d.group) || allKeys;
     for (const part of keys.map(k => partByKey.get(k)).filter(Boolean)) {
@@ -549,8 +650,8 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
   res.json({
     grade,
     grades: cfg.grades.list,
-    groups: cfg.groups,
-    parts: cfg.parts.map(p => ({ key: p.key, label: p.label.replace('{grade}', grade), graded: p.graded })),
+    groups,
+    parts: allParts.map(p => ({ key: p.key, label: p.label.replace('{grade}', grade), graded: p.graded || false, custom: p.custom || false })),
     sources: cfg.sources.filter(s => s.enabled).map(s => ({ key: s.key, label: s.label })),
     site: cfg.site,
     schedule: cfg.schedule,

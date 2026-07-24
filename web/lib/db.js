@@ -107,6 +107,16 @@ CREATE TABLE IF NOT EXISTS cell_flags (
   PRIMARY KEY (device, part, flag)
 );
 CREATE INDEX IF NOT EXISTS idx_flags_dp ON cell_flags (device, part);
+
+-- Custom parts (columns) added from the UI. Merged with git-defined parts at read time.
+CREATE TABLE IF NOT EXISTS custom_parts (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  key     TEXT NOT NULL UNIQUE,
+  label   TEXT NOT NULL,
+  query   TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  ts      TEXT NOT NULL
+);
 `);
 
 const nowIso = () => new Date().toISOString();
@@ -253,6 +263,15 @@ const listCustomDevicesStmt = db.prepare(`SELECT * FROM custom_devices ORDER BY 
 const deleteCustomDeviceStmt = db.prepare(`DELETE FROM custom_devices WHERE id = ?`);
 const setCustomDeviceEnabledStmt = db.prepare(`UPDATE custom_devices SET enabled = ? WHERE id = ?`);
 
+// ─────────────────────────────────────────────────────── custom parts
+const addCustomPartStmt = db.prepare(`
+  INSERT INTO custom_parts (key, label, query, enabled, ts)
+  VALUES (@key, @label, @query, 1, @ts)
+  ON CONFLICT (key) DO UPDATE SET label=excluded.label, query=excluded.query, ts=excluded.ts
+`);
+const listCustomPartsStmt  = db.prepare(`SELECT * FROM custom_parts WHERE enabled = 1 ORDER BY id`);
+const deleteCustomPartStmt = db.prepare(`DELETE FROM custom_parts WHERE id = ?`);
+
 // ─────────────────────────────────────────────────────────── cell flags
 const setFlagStmt = db.prepare(`
   INSERT INTO cell_flags (device, part, flag, note, ts)
@@ -296,6 +315,9 @@ module.exports = {
   listCustomDevices: () => listCustomDevicesStmt.all(),
   deleteCustomDevice: id => deleteCustomDeviceStmt.run(id).changes,
   setCustomDeviceEnabled: (id, on) => setCustomDeviceEnabledStmt.run(on ? 1 : 0, id).changes,
+  addCustomPart: r => addCustomPartStmt.run(r),
+  listCustomParts: () => listCustomPartsStmt.all(),
+  deleteCustomPart: id => deleteCustomPartStmt.run(id).changes,
   setFlag: r => setFlagStmt.run(r),
   clearFlag: (d, p, f) => clearFlagStmt.run(d, p, f).changes,
   listFlags: () => listFlagsStmt.all(),

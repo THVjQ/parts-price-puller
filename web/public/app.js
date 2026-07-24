@@ -942,33 +942,125 @@
     }
     if (state.family) gsel.value = state.family;
     $('#ndMsg').textContent = '';
+    $('#ncMsg').textContent = '';
     openDrawer(devicesDrawer);
-    await refreshCustomList();
+    await Promise.all([refreshDeviceOrderList(), refreshColumnOrderList()]);
   }
 
-  async function refreshCustomList() {
-    const box = $('#customList');
+  async function refreshDeviceOrderList() {
+    const box = $('#deviceOrderList');
+    const labelEl = $('#devOrderFamilyLabel');
     box.textContent = 'Loading…';
     try {
       const r = await api('GET', '/api/devices');
-      const groupLabel = id => (state.data.groups.find(g => g.id === id) || {}).label || id;
+      const fam = state.family || (state.data.groups[0] && state.data.groups[0].id);
+      const group = state.data.groups.find(g => g.id === fam);
+      if (labelEl) labelEl.textContent = (group && group.label) || fam || 'all';
+
+      const customByName = new Map(r.devices.map(d => [d.name.toLowerCase(), d]));
+      // All devices in the current family from the matrix (already ordered by server)
+      const devNames = state.data.rows.filter(r => !fam || r.group === fam).map(r => r.device);
+      // Append custom devices not yet pulled (no price rows)
+      r.devices.filter(d => d.grp === fam && !devNames.some(n => n.toLowerCase() === d.name.toLowerCase()))
+        .forEach(d => devNames.push(d.name));
+
       box.innerHTML = '';
-      if (!r.devices.length) { box.appendChild(el('div', 'none', 'None yet — add one above.')); return; }
-      r.devices.forEach(d => {
+      if (!devNames.length) { box.appendChild(el('div', 'none', 'No devices in this family yet.')); return; }
+
+      devNames.forEach((name, idx) => {
+        const isCustom = customByName.has(name.toLowerCase());
         const row = el('div', 'drow');
-        const left = el('div');
-        left.appendChild(el('div', null, d.name));
-        left.appendChild(el('div', 'meta', groupLabel(d.grp)));
-        row.appendChild(left);
-        const del = el('button', null, '✕');
-        del.title = 'Remove ' + d.name;
-        del.onclick = async () => {
-          if (!confirm('Remove ' + d.name + '? Any prices/pins on it stay in history but the row goes.')) return;
-          await api('DELETE', '/api/devices/' + d.id);
-          await refreshCustomList();
-          await loadMatrix();
+
+        const up = el('button', 'order-btn', '▲');
+        up.disabled = idx === 0; up.title = 'Move up';
+        up.onclick = async () => {
+          const o = [...devNames]; [o[idx-1], o[idx]] = [o[idx], o[idx-1]];
+          await api('PUT', '/api/device-order', { family: fam, order: o });
+          await loadMatrix(); await refreshDeviceOrderList();
         };
-        row.appendChild(del);
+        const dn = el('button', 'order-btn', '▼');
+        dn.disabled = idx === devNames.length - 1; dn.title = 'Move down';
+        dn.onclick = async () => {
+          const o = [...devNames]; [o[idx], o[idx+1]] = [o[idx+1], o[idx]];
+          await api('PUT', '/api/device-order', { family: fam, order: o });
+          await loadMatrix(); await refreshDeviceOrderList();
+        };
+        row.appendChild(up); row.appendChild(dn);
+
+        const lbl = el('div', 'drow-label', name);
+        if (isCustom) lbl.appendChild(el('span', 'custom-badge', 'custom'));
+        row.appendChild(lbl);
+
+        if (isCustom) {
+          const cd = customByName.get(name.toLowerCase());
+          const del = el('button', 'drow-del', '✕');
+          del.title = 'Remove ' + name;
+          del.onclick = async () => {
+            if (!confirm('Remove ' + name + '? Any prices/pins on it stay in history but the row goes.')) return;
+            await api('DELETE', '/api/devices/' + cd.id);
+            await loadMatrix(); await refreshDeviceOrderList();
+          };
+          row.appendChild(del);
+        }
+        box.appendChild(row);
+      });
+    } catch (e) { box.textContent = e.message; }
+  }
+
+  async function refreshColumnOrderList() {
+    const box = $('#columnOrderList');
+    const labelEl = $('#colOrderFamilyLabel');
+    box.textContent = 'Loading…';
+    try {
+      const r = await api('GET', '/api/parts');
+      const fam = state.family || (state.data.groups[0] && state.data.groups[0].id);
+      const group = state.data.groups.find(g => g.id === fam);
+      if (labelEl) labelEl.textContent = (group && group.label) || fam || 'all';
+
+      const customByKey = new Map(r.parts.map(p => [p.key, p]));
+      // Columns in current family (in server-ordered sequence from matrix data)
+      const famParts = (group && group.parts) || state.data.parts.map(p => p.key);
+      const partMetas = new Map(state.data.parts.map(p => [p.key, p]));
+
+      box.innerHTML = '';
+      if (!famParts.length) { box.appendChild(el('div', 'none', 'No columns yet.')); return; }
+
+      famParts.forEach((key, idx) => {
+        const isCustom = customByKey.has(key);
+        const meta = partMetas.get(key) || { key, label: key };
+        const row = el('div', 'drow');
+
+        const up = el('button', 'order-btn', '▲');
+        up.disabled = idx === 0; up.title = 'Move up';
+        up.onclick = async () => {
+          const o = [...famParts]; [o[idx-1], o[idx]] = [o[idx], o[idx-1]];
+          await api('PUT', '/api/column-order', { family: fam, order: o });
+          await loadMatrix(); await refreshColumnOrderList();
+        };
+        const dn = el('button', 'order-btn', '▼');
+        dn.disabled = idx === famParts.length - 1; dn.title = 'Move down';
+        dn.onclick = async () => {
+          const o = [...famParts]; [o[idx], o[idx+1]] = [o[idx+1], o[idx]];
+          await api('PUT', '/api/column-order', { family: fam, order: o });
+          await loadMatrix(); await refreshColumnOrderList();
+        };
+        row.appendChild(up); row.appendChild(dn);
+
+        const lbl = el('div', 'drow-label', meta.label);
+        if (isCustom) lbl.appendChild(el('span', 'custom-badge', 'custom'));
+        row.appendChild(lbl);
+
+        if (isCustom) {
+          const cp = customByKey.get(key);
+          const del = el('button', 'drow-del', '✕');
+          del.title = 'Remove column ' + meta.label;
+          del.onclick = async () => {
+            if (!confirm('Remove column "' + meta.label + '"? Existing prices for it stay in history.')) return;
+            await api('DELETE', '/api/parts/' + cp.id);
+            await loadMatrix(); await refreshColumnOrderList();
+          };
+          row.appendChild(del);
+        }
         box.appendChild(row);
       });
     } catch (e) { box.textContent = e.message; }
@@ -1061,13 +1153,32 @@
       await api('POST', '/api/devices', { name, group: $('#ndGroup').value, search: $('#ndSearch').value.trim() });
       $('#ndName').value = ''; $('#ndSearch').value = '';
       msg.textContent = '✓ Added ' + name;
-      state.family = $('#ndGroup').value;   // jump to the family it landed in
+      state.family = $('#ndGroup').value;
       localStorage.setItem('ppp.family', state.family);
-      await refreshCustomList();
       await loadMatrix();
+      await refreshDeviceOrderList();
     } catch (e) { msg.textContent = '✗ ' + e.message; }
   };
   $('#ndName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ndAdd').click(); });
+
+  $('#ncAdd').onclick = async () => {
+    const label = $('#ncLabel').value.trim();
+    const msg = $('#ncMsg');
+    if (!label) { msg.textContent = 'Enter a label.'; return; }
+    const key = $('#ncKey').value.trim() || label.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    try {
+      await api('POST', '/api/parts', { key, label });
+      $('#ncLabel').value = ''; $('#ncKey').value = '';
+      msg.textContent = '✓ Added column ' + label;
+      await loadMatrix();
+      await refreshColumnOrderList();
+    } catch (e) { msg.textContent = '✗ ' + e.message; }
+  };
+  $('#ncLabel').addEventListener('input', () => {
+    const auto = $('#ncLabel').value.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    $('#ncKey').placeholder = auto || 'auto from label';
+  });
+  $('#ncLabel').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ncAdd').click(); });
 
   ['#roundMode', '#roundStep', '#endsWith'].forEach(sel => {
     $(sel).addEventListener('change', readRounding);

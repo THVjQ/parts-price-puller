@@ -187,9 +187,9 @@
   </div>
 </aside>
 
-<!-- add / remove devices -->
+<!-- add / remove / reorder devices and columns -->
 <aside id="devicesDrawer" class="drawer" hidden>
-  <div class="drawer-hd"><strong>Devices</strong><button class="x" id="devicesClose" aria-label="Close">✕</button></div>
+  <div class="drawer-hd"><strong>Devices &amp; Columns</strong><button class="x" id="devicesClose" aria-label="Close">✕</button></div>
   <div class="drawer-bd">
     <fieldset>
       <legend>Add a device</legend>
@@ -200,9 +200,21 @@
       <p class="hint" id="ndMsg"></p>
     </fieldset>
     <fieldset>
-      <legend>Added devices</legend>
-      <p class="hint">The built-in list lives in <code>config/devices.yml</code>. Devices you add here are stored separately and survive updates — remove them any time.</p>
-      <div id="customList" class="devlist">…</div>
+      <legend>Devices — <span id="devOrderFamilyLabel"></span></legend>
+      <p class="hint">▲▼ to reorder. Built-in devices can be moved but not removed.</p>
+      <div id="deviceOrderList" class="devlist">…</div>
+    </fieldset>
+    <fieldset>
+      <legend>Add a column</legend>
+      <label class="row"><span>Label</span><input id="ncLabel" type="text" placeholder="e.g. Rear Camera" autocomplete="off"></label>
+      <label class="row"><span>Key</span><input id="ncKey" type="text" placeholder="auto from label" autocomplete="off"></label>
+      <button class="btn" id="ncAdd">Add column</button>
+      <p class="hint" id="ncMsg"></p>
+    </fieldset>
+    <fieldset>
+      <legend>Columns — <span id="colOrderFamilyLabel"></span></legend>
+      <p class="hint">▲▼ to reorder. Built-in columns can be moved but not removed.</p>
+      <div id="columnOrderList" class="devlist">…</div>
     </fieldset>
   </div>
 </aside>

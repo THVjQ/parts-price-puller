@@ -385,9 +385,15 @@ tr.hidden { display: none; }
 .menu-kind { font-size: 11px; color: var(--muted); margin-bottom: 6px; line-height: 1.3; }
 .menu-preview { color: var(--brand); font-weight: 700; min-height: 18px; margin: 6px 0; }
 .devlist { display: flex; flex-direction: column; gap: 4px; }
-.devlist .drow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+.devlist .drow { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
 .devlist .drow .meta { color: var(--muted); font-size: 11px; }
-.devlist .drow button { background: none; border: 0; color: var(--up); cursor: pointer; font-size: 15px; }
+.devlist .drow .drow-label { flex: 1; display: flex; align-items: center; gap: 6px; }
+.devlist .drow button { background: none; border: 0; color: var(--up); cursor: pointer; font-size: 13px; padding: 1px 4px; border-radius: 3px; }
+.devlist .drow button:hover { background: var(--accent); }
+.devlist .drow button:disabled { opacity: .3; cursor: default; }
+.devlist .drow .drow-del { color: var(--up); margin-left: auto; }
+.devlist .drow .order-btn { color: var(--muted); font-size: 11px; }
+.custom-badge { font-size: 9px; padding: 1px 5px; border-radius: 8px; background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); font-weight: 600; letter-spacing: .04em; }
 .devlist .none { color: var(--muted); font-size: 13px; }
 .menu-actions { display: flex; gap: 6px; }
 .menu-actions .btn { flex: 1; }
