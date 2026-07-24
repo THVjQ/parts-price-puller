@@ -95,6 +95,18 @@ CREATE TABLE IF NOT EXISTS logs (
   message TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_logs_id ON logs (id DESC);
+
+-- Cross-store cell flags: compat issues, micro-soldering, warnings.
+-- Keyed by device+part (no grade, no store) so one flag applies everywhere.
+CREATE TABLE IF NOT EXISTS cell_flags (
+  device  TEXT NOT NULL,
+  part    TEXT NOT NULL,
+  flag    TEXT NOT NULL,
+  note    TEXT NOT NULL DEFAULT '',
+  ts      TEXT NOT NULL,
+  PRIMARY KEY (device, part, flag)
+);
+CREATE INDEX IF NOT EXISTS idx_flags_dp ON cell_flags (device, part);
 `);
 
 const nowIso = () => new Date().toISOString();
@@ -241,6 +253,15 @@ const listCustomDevicesStmt = db.prepare(`SELECT * FROM custom_devices ORDER BY 
 const deleteCustomDeviceStmt = db.prepare(`DELETE FROM custom_devices WHERE id = ?`);
 const setCustomDeviceEnabledStmt = db.prepare(`UPDATE custom_devices SET enabled = ? WHERE id = ?`);
 
+// ─────────────────────────────────────────────────────────── cell flags
+const setFlagStmt = db.prepare(`
+  INSERT INTO cell_flags (device, part, flag, note, ts)
+  VALUES (@device, @part, @flag, @note, @ts)
+  ON CONFLICT (device, part, flag) DO UPDATE SET note=excluded.note, ts=excluded.ts
+`);
+const clearFlagStmt  = db.prepare(`DELETE FROM cell_flags WHERE device=? AND part=? AND flag=?`);
+const listFlagsStmt  = db.prepare(`SELECT device, part, flag, note FROM cell_flags ORDER BY device, part, flag`);
+
 // ─────────────────────────────────────────────────────────────── logs
 const insertLogStmt = db.prepare(`INSERT INTO logs (ts, origin, source, message) VALUES (?, ?, ?, ?)`);
 const listLogsStmt  = db.prepare(`SELECT * FROM logs ORDER BY id DESC LIMIT ?`);
@@ -275,6 +296,9 @@ module.exports = {
   listCustomDevices: () => listCustomDevicesStmt.all(),
   deleteCustomDevice: id => deleteCustomDeviceStmt.run(id).changes,
   setCustomDeviceEnabled: (id, on) => setCustomDeviceEnabledStmt.run(on ? 1 : 0, id).changes,
+  setFlag: r => setFlagStmt.run(r),
+  clearFlag: (d, p, f) => clearFlagStmt.run(d, p, f).changes,
+  listFlags: () => listFlagsStmt.all(),
   log,
   listLogs: n => listLogsStmt.all(n || 200),
   pruneLogs: n => pruneLogsStmt.run(n || 2000).changes,

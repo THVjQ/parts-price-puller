@@ -324,6 +324,37 @@ app.post('/api/manual', requireSession, (req, res) => {
   res.json({ ok: true, price, kind });
 });
 
+// ───────────────────────────────────────────────────────── cell flags
+// Flags apply across ALL stores (no store column) — a compat issue on a part affects
+// every store equally. Three types: 'compat', 'microsolder', 'warning'.
+const FLAG_TYPES = new Set(['compat', 'microsolder', 'warning']);
+
+app.get('/api/flags', requireSession, (req, res) => {
+  res.json({ flags: db.listFlags() });
+});
+
+app.post('/api/flags', requireSession, (req, res) => {
+  const b = req.body || {};
+  const device = deviceIndex.get(clean(b.device).toLowerCase());
+  const part = partIndex.get(clean(b.part).toUpperCase());
+  if (!device || !part) return res.status(400).json({ error: 'unknown device or part' });
+  if (!FLAG_TYPES.has(b.flag)) return res.status(400).json({ error: 'flag must be compat, microsolder or warning' });
+  db.setFlag({ device: device.name, part: part.key, flag: b.flag, note: clean(b.note).slice(0, 300), ts: nowIso() });
+  db.log('web', '', `Flag set: ${device.name}/${part.key} = ${b.flag}`);
+  res.json({ ok: true });
+});
+
+app.delete('/api/flags', requireSession, (req, res) => {
+  const b = Object.keys(req.body || {}).length ? req.body : req.query;
+  const device = deviceIndex.get(clean(b.device).toLowerCase());
+  const part = partIndex.get(clean(b.part).toUpperCase());
+  if (!device || !part) return res.status(400).json({ error: 'unknown device or part' });
+  if (!FLAG_TYPES.has(b.flag)) return res.status(400).json({ error: 'invalid flag type' });
+  const n = db.clearFlag(device.name, part.key, b.flag);
+  db.log('web', '', `Flag cleared: ${device.name}/${part.key} = ${b.flag}`);
+  res.json({ ok: true, removed: n });
+});
+
 // ───────────────────────────────────────────────────────── custom devices
 app.get('/api/devices', requireSession, (req, res) => {
   res.json({ devices: db.listCustomDevices() });
@@ -419,7 +450,8 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
   const latest = db.latestByCell(grade);
   const sourceKeys = cfg.sources.filter(s => s.enabled).map(s => s.key);
 
-  const pinned = new Set(db.listPins().map(p => `${p.device}|${p.part}`));
+  // Map from "device|part" → source string ('CP', 'TPH', 'IMOBILE', …) for coloured pin dots.
+  const pinned = new Map(db.listPins().map(p => [`${p.device}|${p.part}`, p.source || 'CP']));
   // Reference price for the trend colour: what the winning source was at ~4 weeks ago.
   const TREND_DAYS = 28;
   const asOf = db.priceAsOf(grade, new Date(Date.now() - TREND_DAYS * 86400000).toISOString());
@@ -455,12 +487,12 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
             price: best.price, source: best.source, url: best.url, title: best.title,
             ts: best.ts, prev: best.prev, ref4w, manual: Boolean(manual),
             alt: offers.filter(o => o !== best).map(o => ({ source: o.source, price: o.price })),
-            pinned: pinned.has(`${d.name}|${part.key}`),
+            pinned: pinned.get(`${d.name}|${part.key}`) || null,
           }
         : {
             price: null, source: null, ts: miss ? miss.ts : null,
             title: miss ? miss.matched_title : null, url: miss ? miss.url : null,
-            pinned: pinned.has(`${d.name}|${part.key}`),
+            pinned: pinned.get(`${d.name}|${part.key}`) || null,
           };
     }
     return { device: d.name, group: d.group, cells };
@@ -482,6 +514,14 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
     }
   }
 
+  // Build flags map: "device|part" → [{flag, note}] — all stores see the same flags.
+  const flagsMap = {};
+  for (const f of db.listFlags()) {
+    const k = `${f.device}|${f.part}`;
+    if (!flagsMap[k]) flagsMap[k] = [];
+    flagsMap[k].push({ flag: f.flag, note: f.note });
+  }
+
   res.json({
     grade,
     grades: cfg.grades.list,
@@ -489,7 +529,9 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
     parts: cfg.parts.map(p => ({ key: p.key, label: p.label.replace('{grade}', grade), graded: p.graded })),
     sources: cfg.sources.filter(s => s.enabled).map(s => ({ key: s.key, label: s.label })),
     site: cfg.site,
+    schedule: cfg.schedule,
     rows,
+    flags: flagsMap,
     updated: db.lastUpdated(),
     store: store ? store.id : null,
   });

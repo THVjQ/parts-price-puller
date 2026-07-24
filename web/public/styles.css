@@ -4,7 +4,13 @@
    (they resolve if the kit is ever extended to this host) and fall back to a matching
    grotesque stack. */
 :root {
-  --brand:        #d40f16;
+  --flag-compat:    #d97706;   /* amber — compatibility issue */
+  --flag-solder:    #7c3aed;   /* purple — micro-soldering */
+  --flag-warning:   #dc2626;   /* red — warning note */
+  --pin-cp:         #b7791f;   /* CrazyParts pin dot (= legacy --pin) */
+  --pin-tph:        #1565c0;   /* ThePartsHome pin dot */
+  --pin-imobile:    #2e7d32;   /* iMobie pin dot */
+  --brand:          #d40f16;
   --brand-dark:   #a80b11;
   --black:        #000000;
   --header-bg:    #f0eeed;
@@ -35,6 +41,12 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    --flag-compat:  #fbbf24;
+    --flag-solder:  #a78bfa;
+    --flag-warning: #f87171;
+    --pin-cp:       #e0b25a;
+    --pin-tph:      #64b5f6;
+    --pin-imobile:  #66bb6a;
     --header-bg: #17151a;
     --accent:    #1d1a20;
     --bg:        #121014;
@@ -282,10 +294,14 @@ td.cell.manual { box-shadow: inset 3px 0 0 var(--manual); }
 td.cell.manual .w { color: var(--manual); }
 /* A pinned RETAIL override: mark the retail figure so it's obvious it isn't calculated. */
 td.cell.retail-fixed .r { text-decoration: underline dotted var(--manual); text-underline-offset: 3px; }
-td.cell.pinned::after {
+/* Source-specific pin dot (top-right corner, colour by supplier) */
+td.cell[class*="pinned-"]::after {
   content: ""; position: absolute; top: 3px; right: 3px;
-  width: 5px; height: 5px; border-radius: 50%; background: var(--pin);
+  width: 5px; height: 5px; border-radius: 50%;
 }
+td.cell.pinned-cp::after     { background: var(--pin-cp); }
+td.cell.pinned-tph::after    { background: var(--pin-tph); }
+td.cell.pinned-imobile::after { background: var(--pin-imobile); }
 td.loading { padding: 30px; color: var(--muted); }
 tr.hidden { display: none; }
 
@@ -305,7 +321,7 @@ tr.hidden { display: none; }
 .statusbar .sep { opacity: .5; }
 .legend { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 3px; vertical-align: -1px; }
-.sw.pin { background: var(--pin); border-radius: 50%; }
+.sw.pin { background: var(--pin-cp); border-radius: 50%; }
 .sw.man { background: var(--manual); }
 .trend-legend { display: inline-flex; align-items: center; gap: 5px; }
 .trend-legend .grad {
@@ -464,6 +480,114 @@ body.login { align-items: center; justify-content: center; background: var(--hea
 .loginbox input { width: 100%; text-align: center; margin-bottom: 10px; }
 .loginbox .btn { width: 100%; }
 .loginbox .err { color: var(--up); font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+/* ───────────────────────────── store pin button */
+.store-field { flex-shrink: 0; }
+.store-row { display: flex; align-items: center; gap: 4px; }
+.store-row select { flex: 1; min-width: 140px; }
+#storePinBtn {
+  background: none; border: 0; cursor: pointer; color: var(--muted);
+  font-size: 16px; padding: 2px 4px; line-height: 1;
+  border-radius: var(--radius); transition: color .15s; flex-shrink: 0;
+}
+#storePinBtn:hover { color: var(--pin-cp); }
+#storePinBtn.active { color: var(--pin-cp); }
+
+/* ───────────────────────────── price edit input — blue left bar for both kinds */
+.menu-edit input[type="number"] {
+  border-left: 3px solid var(--manual);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* ───────────────────────────── flag dots (top-left corner of cell) */
+.flag-dots {
+  position: absolute; top: 3px; left: 3px;
+  display: flex; flex-direction: row; gap: 2px; pointer-events: none;
+}
+.flag-dot { width: 5px; height: 5px; border-radius: 50%; }
+.flag-dot.flag-compat      { background: var(--flag-compat); }
+.flag-dot.flag-microsolder { background: var(--flag-solder); }
+.flag-dot.flag-warning     { background: var(--flag-warning); }
+
+/* flag legend swatches */
+.flag-legend { display: inline-flex; align-items: center; gap: 5px; }
+.sw.flag-compat-sw  { background: var(--flag-compat); border-radius: 50%; }
+.sw.flag-solder-sw  { background: var(--flag-solder); border-radius: 50%; }
+.sw.flag-warn-sw    { background: var(--flag-warning); border-radius: 50%; }
+
+/* flag menu items — slightly dimmed, not full danger colour */
+.menu-item.flag-item { color: var(--muted); }
+.menu-item.flag-item:hover { color: var(--text); }
+
+/* popover flags section */
+.pop-flags-hd {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin: 8px 0 4px; font-weight: 600;
+}
+.pop-flag { display: flex; gap: 8px; align-items: baseline; margin-bottom: 3px; font-size: 12px; }
+.pop-flag .flag-label { font-weight: 600; }
+.pop-flag .flag-note  { color: var(--muted); }
+.pop-flag.flag-text-compat      .flag-label { color: var(--flag-compat); }
+.pop-flag.flag-text-microsolder .flag-label { color: var(--flag-solder); }
+.pop-flag.flag-text-warning     .flag-label { color: var(--flag-warning); }
+
+/* ───────────────────────────── quote mode */
+#quoteBtn.on { background: var(--manual); color: #fff; border-color: var(--manual); }
+td.cell.quote-sel { outline: 2px solid var(--manual); outline-offset: -2px; z-index: 2; }
+
+.quote-panel {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--panel);
+  border-top: 2px solid var(--manual);
+  box-shadow: 0 -6px 24px rgba(0,0,0,.18);
+  z-index: 55;
+  font-size: 13px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+.quote-hd {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 14px; background: var(--accent);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.quote-title { font-family: var(--font-head); font-weight: 700; font-size: 14px; }
+.quote-timer {
+  font-variant-numeric: tabular-nums; font-size: 12px;
+  color: var(--muted); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px;
+}
+.quote-timer.low { color: var(--up); border-color: var(--up); font-weight: 700; }
+.quote-hd .btn { margin-left: 4px; }
+.quote-hd .x {
+  margin-left: auto; background: none; border: 0;
+  cursor: pointer; color: var(--muted); font-size: 17px; padding: 2px 4px;
+}
+.quote-body { overflow: auto; flex: 1; }
+
+table.quote-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.quote-table th {
+  text-align: left; font-size: 10px; text-transform: uppercase;
+  color: var(--muted); font-weight: 600; padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--panel); z-index: 5;
+}
+table.quote-table td { padding: 4px 10px; border-bottom: 1px solid var(--line); }
+td.qprice { font-weight: 700; font-variant-numeric: tabular-nums; }
+.qt-label { color: var(--muted); font-weight: 600; }
+table.quote-table tfoot td { background: var(--accent); }
+table.quote-table tfoot td.qprice { color: var(--brand); font-size: 14px; }
+table.quote-table input[type="number"] {
+  width: 100px; border: 1px solid var(--line-strong); border-radius: 4px;
+  padding: 2px 6px; font: inherit; font-variant-numeric: tabular-nums;
+  background: var(--panel); color: var(--text);
+}
+.qtd-del {
+  background: none; border: 0; color: var(--muted);
+  cursor: pointer; font-size: 13px; padding: 0 4px;
+}
+.qtd-del:hover { color: var(--up); }
 
 @media (max-width: 720px) {
   .field.actions { margin-left: 0; }

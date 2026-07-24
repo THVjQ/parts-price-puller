@@ -36,7 +36,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults: &default_calc
-  rounding: { mode: none, step: 5, endsWith: null }
+  rounding: { mode: up, step: 10, endsWith: null }
   rules:
     # cost × 110% + $90; anything over $250 → cost × 110% + $150
     "*|*":       { multiplyPercent: 110, add: 90, threshold: 250, overAdd: 150 }

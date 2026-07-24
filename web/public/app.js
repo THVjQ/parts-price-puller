@@ -24,6 +24,11 @@
     family: qs.get('family') || localStorage.getItem('ppp.family') || '',   // active device tab
     currency: '$',
     gstPercent: 10,
+    // Quote mode
+    quoteActive: false,
+    quoteItems:  [],
+    quoteEnd:    null,
+    quoteTimer:  null,
   };
 
   const store = () => state.stores.find(s => s.id === state.storeId) || null;
@@ -68,10 +73,23 @@
     state.stores = r.stores;
     const sel = $('#storeSel');
     sel.innerHTML = '<option value="">— wholesale only —</option>';
-    r.stores.forEach(s => sel.add(new Option(s.name + (s.edited ? '' : ' (default)'), s.id)));
+    r.stores.forEach(s => sel.add(new Option(s.name, s.id)));
     if (state.storeId && !store()) state.storeId = '';
     sel.value = state.storeId;
+    updateStorePin();
     reflectViewAvailability();
+  }
+
+  // ── store pin ─────────────────────────────────────────────────────────────
+  // Pinned store is localStorage-only so it follows the browser session without
+  // fighting the server-side prefs (which remember your LAST visit, not your DEFAULT).
+  function updateStorePin() {
+    const btn = $('#storePinBtn');
+    if (!btn) return;
+    const pinned = localStorage.getItem('ppp.pinnedStore');
+    const isActive = Boolean(state.storeId) && pinned === state.storeId;
+    btn.classList.toggle('active', isActive);
+    btn.title = isActive ? 'Unpin — stop always reopening here' : 'Pin this store so it always opens first';
   }
 
   async function loadMatrix() {
@@ -81,17 +99,14 @@
     state.grade = d.grade;
     state.currency = (d.site && d.site.currency) || '$';
     state.gstPercent = (d.site && d.site.gstPercent) || 0;
+    if (d.schedule) {
+      const sn = document.getElementById('scheduleNote');
+      if (sn) sn.textContent = 'Refreshes: ' + d.schedule.day + 's';
+    }
 
     $('#siteTitle').textContent = (d.site && d.site.title) || 'Parts Pricing';
     $('#siteSubtitle').textContent = (d.site && d.site.subtitle) || '';
     document.title = ((d.site && d.site.title) || 'Parts Pricing') + ' — ' + d.grade;
-
-    const gs = $('#gradeSel');
-    if (gs.options.length !== d.grades.length) {
-      gs.innerHTML = '';
-      d.grades.forEach(g => gs.add(new Option(g, g)));
-    }
-    gs.value = d.grade;
 
     $('#updated').textContent = 'Prices updated ' + ago(d.updated);
     render();
@@ -191,6 +206,20 @@
         td.dataset.part = k;
         td.dataset.group = row.group;
 
+        // Flag dots (top-left corner, positioned absolutely — won't displace prices)
+        const flagKey = row.device + '|' + k;
+        const cellFlags = (d.flags && d.flags[flagKey]) || [];
+        if (cellFlags.length) {
+          const flagDots = el('div', 'flag-dots');
+          const flagLabels = { compat: 'Compatibility issue', microsolder: 'Micro-soldering needed', warning: 'Warning' };
+          cellFlags.forEach(f => {
+            const dot = el('span', 'flag-dot flag-' + f.flag);
+            dot.title = (flagLabels[f.flag] || f.flag) + (f.note ? ': ' + f.note : '');
+            flagDots.appendChild(dot);
+          });
+          td.appendChild(flagDots);
+        }
+
         const ri = retailInfo(c.price, row.group, k, row.device);
         // A cell can be "empty" of wholesale yet still carry a fixed retail override.
         if (c.price == null && ri.value == null) {
@@ -201,7 +230,8 @@
           if (c.manual) td.classList.add('manual');
           else if (c.price != null) applyTrend(td, c.price, c.ref4w);   // 4-week wash
           if (ri.fixed) td.classList.add('retail-fixed');
-          if (c.pinned) td.classList.add('pinned');
+          // Source-specific pin dot colour: CP=amber, TPH=blue, iMobile=green
+          if (c.pinned) td.classList.add('pinned-' + c.pinned.toLowerCase());
 
           const wSpan = () => el('span', 'w', c.price == null ? '—' : money(c.price));
           const rSpan = () => el('span', 'r', money(ri.value));
@@ -320,6 +350,21 @@
     }
     pop.appendChild(dl);
     if (c.title && c.price != null && !c.manual) pop.appendChild(el('p', 'title', c.title));
+
+    // Flags section (compat / microsolder / warning)
+    const flagKey = td.dataset.device + '|' + td.dataset.part;
+    const cellFlags = (d.flags && d.flags[flagKey]) || [];
+    if (cellFlags.length) {
+      pop.appendChild(el('div', 'pop-flags-hd', 'Flags'));
+      const flagLabels = { compat: '⚠ Compatibility issue', microsolder: '🔩 Micro-soldering needed', warning: '! Warning' };
+      cellFlags.forEach(f => {
+        const row = el('div', 'pop-flag flag-text-' + f.flag);
+        row.appendChild(el('span', 'flag-label', flagLabels[f.flag] || f.flag));
+        if (f.note) row.appendChild(el('span', 'flag-note', f.note));
+        pop.appendChild(row);
+      });
+    }
+
     pop.appendChild(el('p', 'title', 'Right-click to set wholesale or retail'));
 
     place(pop, td);
@@ -378,6 +423,15 @@
     if (c.url) {
       item('🔗 Open product page', '', () => { window.open(c.url, '_blank', 'noopener'); closeMenu(); });
     }
+
+    // Flag options — compat, micro-soldering, warning (apply across ALL stores)
+    const flagKey = td.dataset.device + '|' + td.dataset.part;
+    const existingFlags = (state.data.flags && state.data.flags[flagKey]) || [];
+    const hasFlag = f => existingFlags.some(x => x.flag === f);
+    item((hasFlag('compat') ? '⚠ Edit' : '⚠ Mark') + ' compatibility issue', 'flag-item', () => showFlagEditor(td, 'compat'));
+    item((hasFlag('microsolder') ? '🔩 Edit' : '🔩 Mark') + ' micro-soldering needed', 'flag-item', () => showFlagEditor(td, 'microsolder'));
+    item((hasFlag('warning') ? '! Edit' : '! Add') + ' warning note', 'flag-item', () => showFlagEditor(td, 'warning'));
+
     // The only way to drop a pin — Setup Mode can re-pin a cell but never unbind one,
     // and the sheet's Pins tab (where you used to delete the row) is gone.
     if (c.pinned) {
@@ -454,6 +508,59 @@
     });
   }
 
+  function showFlagEditor(td, flagType) {
+    const labels = { compat: '⚠ Compatibility issue', microsolder: '🔩 Micro-soldering needed', warning: '! Warning note' };
+    const part = state.data.parts.find(p => p.key === td.dataset.part);
+    const flagKey = td.dataset.device + '|' + td.dataset.part;
+    const existing = state.data.flags && state.data.flags[flagKey];
+    const existingFlag = existing && existing.find(f => f.flag === flagType);
+
+    menu.innerHTML = '';
+    menu.appendChild(el('div', 'menu-hd', td.dataset.device + ' — ' + part.label));
+    const wrap = el('div', 'menu-edit');
+    wrap.appendChild(el('div', 'menu-kind', labels[flagType] + '  ·  applies to all stores'));
+    const input = el('input');
+    input.type = 'text';
+    input.placeholder = 'Note (optional, max 200 chars)';
+    input.value = existingFlag ? existingFlag.note : '';
+    input.maxLength = 200;
+    wrap.appendChild(input);
+
+    const row = el('div', 'menu-actions');
+    const save = el('button', 'btn small', 'Set flag');
+    save.onclick = async () => {
+      save.disabled = true; save.textContent = 'Saving…';
+      try {
+        await api('POST', '/api/flags', { device: td.dataset.device, part: td.dataset.part, flag: flagType, note: input.value.trim() });
+        closeMenu();
+        await loadMatrix();
+      } catch (e) {
+        save.disabled = false; save.textContent = 'Set flag';
+        wrap.appendChild(el('div', 'hint', '✗ ' + e.message));
+      }
+    };
+    const cancel = el('button', 'btn ghost small', 'Cancel');
+    cancel.onclick = closeMenu;
+    row.append(save, cancel);
+    if (existingFlag) {
+      const clear = el('button', 'btn ghost small', 'Clear flag');
+      clear.onclick = async () => {
+        clear.disabled = true;
+        try {
+          await api('DELETE', '/api/flags', { device: td.dataset.device, part: td.dataset.part, flag: flagType });
+          closeMenu();
+          await loadMatrix();
+        } catch (e) { clear.disabled = false; }
+      };
+      row.appendChild(clear);
+    }
+    wrap.appendChild(row);
+    menu.appendChild(wrap);
+    place(menu, td);
+    input.focus();
+    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); save.click(); } if (ev.key === 'Escape') closeMenu(); });
+  }
+
   async function saveManual(td, price, kind) {
     try {
       await api('POST', '/api/manual', {
@@ -482,6 +589,112 @@
 
   function openDrawer(node) { node.hidden = false; scrim.hidden = false; }
   function closeDrawers() { drawer.hidden = true; statusDrawer.hidden = true; devicesDrawer.hidden = true; scrim.hidden = true; }
+
+  // ───────────────────────────────────────────── quote mode
+  // Select multiple cells across the same (or any) device, build a quick price estimate.
+  // The quote auto-expires 30 minutes after the first cell is added.
+
+  function enterQuote() {
+    state.quoteActive = true;
+    $('#quoteBtn').classList.add('on');
+    $('#quotePanel').hidden = false;
+    renderQuotePanel();
+  }
+
+  function exitQuote() {
+    state.quoteActive = false;
+    state.quoteItems = [];
+    if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
+    state.quoteEnd = null;
+    $('#quoteBtn').classList.remove('on');
+    $('#quotePanel').hidden = true;
+    document.querySelectorAll('td.cell.quote-sel').forEach(t => t.classList.remove('quote-sel'));
+  }
+
+  function quoteClickCell(td) {
+    const c = cellOf(td);
+    if (!c) return;
+    const key = td.dataset.device + '|' + td.dataset.part;
+    const idx = state.quoteItems.findIndex(x => x.key === key);
+    if (idx >= 0) {
+      state.quoteItems.splice(idx, 1);
+      td.classList.remove('quote-sel');
+    } else {
+      if (!state.quoteEnd) {
+        state.quoteEnd = Date.now() + 30 * 60 * 1000;
+        state.quoteTimer = setInterval(tickQuoteTimer, 1000);
+      }
+      const part = state.data.parts.find(p => p.key === td.dataset.part);
+      const ri = retailInfo(c.price, td.dataset.group, td.dataset.part, td.dataset.device);
+      const origPrice = ri.value != null ? ri.value : c.price;
+      state.quoteItems.push({
+        key, device: td.dataset.device, part: td.dataset.part,
+        partLabel: part ? part.label : td.dataset.part,
+        group: td.dataset.group,
+        origPrice,
+        newPrice: origPrice,
+      });
+      td.classList.add('quote-sel');
+    }
+    renderQuotePanel();
+  }
+
+  function tickQuoteTimer() {
+    const remaining = state.quoteEnd ? Math.max(0, state.quoteEnd - Date.now()) : 0;
+    const t = document.getElementById('quoteTimer');
+    if (!t) return;
+    const mins = Math.floor(remaining / 60000);
+    const secs = Math.floor((remaining % 60000) / 1000);
+    t.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    t.classList.toggle('low', mins < 5);
+    if (remaining === 0) exitQuote();
+  }
+
+  function renderQuotePanel() {
+    const tbody = document.getElementById('quoteBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    let totalOrig = 0, totalNew = 0;
+    state.quoteItems.forEach((item, idx) => {
+      const tr = el('tr');
+      tr.appendChild(el('td', null, item.device));
+      tr.appendChild(el('td', null, item.partLabel));
+      tr.appendChild(el('td', 'qprice', item.origPrice != null ? money(item.origPrice) : '—'));
+      const newTd = el('td', 'qprice');
+      const inp = el('input');
+      inp.type = 'number'; inp.step = '0.01'; inp.min = '0';
+      inp.value = item.newPrice != null ? item.newPrice : '';
+      inp.placeholder = '—';
+      inp.oninput = () => {
+        const v = Number(inp.value);
+        state.quoteItems[idx].newPrice = v > 0 ? v : null;
+        refreshQuoteTotals();
+      };
+      newTd.appendChild(inp);
+      tr.appendChild(newTd);
+      const delBtn = el('button', 'qtd-del', '✕');
+      delBtn.onclick = () => {
+        const cellTd = document.querySelector(`td.cell[data-device="${item.device}"][data-part="${item.part}"]`);
+        if (cellTd) cellTd.classList.remove('quote-sel');
+        state.quoteItems.splice(idx, 1);
+        renderQuotePanel();
+      };
+      const delTd = el('td');
+      delTd.appendChild(delBtn);
+      tr.appendChild(delTd);
+      if (item.origPrice != null) totalOrig += item.origPrice;
+      if (item.newPrice != null) totalNew += item.newPrice;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('quoteTotalOrig').textContent = totalOrig > 0 ? money(totalOrig) : '—';
+    document.getElementById('quoteTotalNew').textContent = totalNew > 0 ? money(totalNew) : '—';
+  }
+
+  function refreshQuoteTotals() {
+    let totalNew = 0;
+    state.quoteItems.forEach(item => { if (item.newPrice != null) totalNew += item.newPrice; });
+    document.getElementById('quoteTotalNew').textContent = totalNew > 0 ? money(totalNew) : '—';
+  }
 
   function openCalc() {
     const s = store();
@@ -628,6 +841,8 @@
       add('Stores', String(s.counts.stores));
       add('Last price', ago(s.updated));
       add('Next scrape', s.schedule.day + ' ' + String(s.schedule.hour).padStart(2, '0') + ':00 ' + s.schedule.timezone);
+      const sn = document.getElementById('scheduleNote');
+      if (sn) sn.textContent = 'Refreshes: ' + s.schedule.day + 's';
       add('Config loaded', ago(s.config.loadedAt) + (s.config.error ? ' — ERROR' : ''), s.config.error ? 'bad' : 'ok');
       if (s.config.error) add('Config error', s.config.error.message, 'bad');
       add('Git', s.git.enabled
@@ -712,15 +927,18 @@
   $('#storeSel').onchange = e => {
     state.storeId = e.target.value;
     if (state.storeId && state.view === 'wholesale') state.view = 'both';
+    updateStorePin();
     reflectViewAvailability();
     render();
     savePrefs();
   };
 
-  $('#gradeSel').onchange = e => {
-    state.grade = e.target.value;
-    savePrefs();
-    loadMatrix().catch(err => alert(err.message));
+  $('#storePinBtn').onclick = () => {
+    if (!state.storeId) return;
+    const cur = localStorage.getItem('ppp.pinnedStore');
+    if (cur === state.storeId) localStorage.removeItem('ppp.pinnedStore');
+    else localStorage.setItem('ppp.pinnedStore', state.storeId);
+    updateStorePin();
   };
 
   $('#viewSeg').onclick = e => {
@@ -737,6 +955,7 @@
   $('#body').onclick = e => {
     const td = e.target.closest('td.cell');
     closeMenu();
+    if (state.quoteActive && td) { quoteClickCell(td); e.stopPropagation(); return; }
     if (!td || (td.classList.contains('empty') && !td.dataset.miss)) return closePop();
     openPop(td);
     e.stopPropagation();
@@ -756,6 +975,16 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePop(); closeMenu(); closeDrawers(); } });
 
   $('#calcBtn').onclick = openCalc;
+  $('#quoteBtn').onclick = () => { if (state.quoteActive) exitQuote(); else enterQuote(); };
+  $('#quoteClearBtn').onclick = () => {
+    document.querySelectorAll('td.cell.quote-sel').forEach(t => t.classList.remove('quote-sel'));
+    state.quoteItems = [];
+    state.quoteEnd = null;
+    if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
+    document.getElementById('quoteTimer').textContent = '30:00';
+    renderQuotePanel();
+  };
+  $('#quoteCloseBtn').onclick = exitQuote;
   $('#statusBtn').onclick = openStatus;
   $('#devicesBtn').onclick = openDevices;
   $('#drawerClose').onclick = closeDrawers;
@@ -832,7 +1061,10 @@
     try {
       // Server-side prefs first (they follow the login), query string wins over them.
       const p = (await api('GET', '/api/prefs').catch(() => ({ prefs: {} }))).prefs || {};
-      if (!qs.get('store') && p.store) state.storeId = p.store;
+      // Pinned store wins over server prefs (it's the explicit "always start here" choice).
+      const pinnedStore = localStorage.getItem('ppp.pinnedStore');
+      if (!qs.get('store') && pinnedStore) state.storeId = pinnedStore;
+      else if (!qs.get('store') && p.store) state.storeId = p.store;
       if (!qs.get('grade') && p.grade) state.grade = p.grade;
       if (!qs.get('view') && p.view) state.view = p.view;
       if (!qs.get('family') && !state.family && p.family) state.family = p.family;

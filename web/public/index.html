@@ -20,15 +20,13 @@
   </div>
 
   <div class="controls">
-    <label class="field">
+    <div class="field store-field">
       <span>Store</span>
-      <select id="storeSel"><option value="">— wholesale only —</option></select>
-    </label>
-
-    <label class="field">
-      <span>Grade</span>
-      <select id="gradeSel"></select>
-    </label>
+      <div class="store-row">
+        <select id="storeSel"><option value="">— wholesale only —</option></select>
+        <button id="storePinBtn" title="Pin this store as your default">📌</button>
+      </div>
+    </div>
 
     <div class="field">
       <span>Show</span>
@@ -48,6 +46,7 @@
       <span>&nbsp;</span>
       <div class="btnrow">
         <button id="calcBtn" class="btn" title="Edit this store's markup / labour / rounding">Calculator</button>
+        <button id="quoteBtn" class="btn ghost" title="Start a repair quote — click cells to add parts">Quote</button>
         <button id="devicesBtn" class="btn ghost" title="Add or remove devices">Devices</button>
         <button id="statusBtn" class="btn ghost" title="System status, logs, config">Status</button>
         <button id="logoutBtn" class="btn ghost" title="Log out">Exit</button>
@@ -76,11 +75,18 @@
   <span id="counts"></span>
   <span class="sep">·</span>
   <span id="gitline"></span>
+  <span class="sep">·</span>
+  <span id="scheduleNote"></span>
   <span class="spacer"></span>
   <span class="legend">
     <span class="trend-legend"><i class="grad"></i> cheaper ← 4 wk → dearer</span>
     <i class="sw pin"></i> pinned
     <i class="sw man"></i> manual
+    <span class="flag-legend">
+      <i class="sw flag-compat-sw"></i> compat
+      <i class="sw flag-solder-sw"></i> solder
+      <i class="sw flag-warn-sw"></i> warn
+    </span>
   </span>
 </footer>
 
@@ -199,6 +205,32 @@
     </fieldset>
   </div>
 </aside>
+
+<!-- quote panel — appears at the bottom when Quote mode is active -->
+<div id="quotePanel" class="quote-panel" hidden>
+  <div class="quote-hd">
+    <span class="quote-title">Quote</span>
+    <span class="quote-timer" id="quoteTimer">30:00</span>
+    <button id="quoteClearBtn" class="btn ghost small">Clear</button>
+    <button id="quoteCloseBtn" class="x" title="Close quote">✕</button>
+  </div>
+  <div class="quote-body">
+    <table class="quote-table">
+      <thead>
+        <tr><th>Device</th><th>Part</th><th>Orig Price</th><th>New Price</th><th></th></tr>
+      </thead>
+      <tbody id="quoteBody"></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2" class="qt-label">Total</td>
+          <td id="quoteTotalOrig" class="qprice">—</td>
+          <td id="quoteTotalNew" class="qprice">—</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
 
 <div id="scrim" class="scrim" hidden></div>
 
