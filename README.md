@@ -85,8 +85,18 @@ can't build), one port behind the tunnel.
 ⚠ Back up the **`ppp_data`** volume — it holds every price, pin and store calculator, and
 none of it is recoverable from git.
 
-Updating: config YAML edits are live. For app updates, **Apps → parts-price-puller → ⋮ →
-Pull image → Restart** (GitHub Actions rebuilds both images on every push to `main`).
+### Updates are automatic — both layers
+
+- **Config** (`config/*.yml`): the web container git-syncs the repo, so device/parts/
+  store edits on GitHub are live in seconds (see [Live config editing](#live-config-editing)).
+- **App code** (the image itself): the bundled **watchtower** service checks GHCR every
+  5 minutes and, when a push to `main` has rebuilt the image, pulls it and recreates
+  **only** the two `ppp`-scoped containers — never anything else on the host. GitHub
+  Actions rebuilds both images on every push to `main`, so a code change lands on the
+  NAS a few minutes later on its own.
+
+Nothing to click either way. (To force a code update immediately rather than wait for
+the poll: **Apps → parts-price-puller → ⋮ → Pull image → Restart**.)
 
 ### Any other Docker host
 

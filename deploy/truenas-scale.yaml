@@ -37,6 +37,8 @@ services:
     pull_policy: always
     container_name: ppp-web
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.scope: ppp   # watchtower auto-updates only this scope
     ports:
       - "8084:8080"
     environment:
@@ -78,6 +80,8 @@ services:
     pull_policy: always
     container_name: ppp-scraper
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.scope: ppp
     environment:
       TZ: Australia/Sydney
       # Container-to-container: the scheduled pull never leaves the app network.
@@ -95,6 +99,23 @@ services:
         condition: service_started
     # Playwright needs more than the default 64MB of /dev/shm for Chromium.
     shm_size: "1gb"
+
+  # Auto-deploys new app CODE (config/*.yml already live-syncs on its own). Checks GHCR
+  # every 5 min and, when a push to main has rebuilt the image, pulls it and recreates
+  # only the 'ppp'-scoped containers above — never anything else on the host.
+  watchtower:
+    image: containrrr/watchtower:latest
+    pull_policy: always
+    container_name: ppp-watchtower
+    restart: unless-stopped
+    environment:
+      TZ: Australia/Sydney
+      WATCHTOWER_SCOPE: ppp
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "300"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   ppp_repo:
