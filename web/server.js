@@ -163,8 +163,10 @@ app.get('/api/config', requireKeyOrSession, (req, res) => {
  * POST /api/ingest — a batch of prices from the scraper or the userscript.
  * Accepts both the new shape {source:'CP', origin:'tm', results:[…]} and the old
  * Apps Script one {site:'CP', source:'tm', results:[…]}.
+ * Auth: the scraper still uses X-Key; the userscript now rides the logged-in session
+ * (username + passcode), so either one is accepted.
  */
-app.post('/api/ingest', requireKey, (req, res) => {
+app.post('/api/ingest', requireKeyOrSession, (req, res) => {
   const cfg = config.get();
   const body = req.body || {};
   const supplier = clean(body.site || body.source || 'CP').toUpperCase();
@@ -196,7 +198,7 @@ app.post('/api/ingest', requireKey, (req, res) => {
   res.json({ ok: true, written: rows.length, skipped });
 });
 
-app.post('/api/log', requireKey, (req, res) => {
+app.post('/api/log', requireKeyOrSession, (req, res) => {
   const b = req.body || {};
   db.log(clean(b.origin || b.source) || 'unknown', clean(b.site || '').toUpperCase(), clean(b.message));
   res.json({ ok: true });

@@ -198,8 +198,10 @@ to any device. **Reset to git defaults** hands it back.
 (auto-updates via `@updateURL`).
 
 First run: open CrazyParts logged in → 💰 panel (bottom-left) → **⚙ Settings** → the site
-URL (`https://pricing.thvjq.com.au`) and the **ingest key** (`INGEST_KEY`
-from `.env`). Both live in Tampermonkey storage, so updates never wipe them.
+URL (`https://pricing.thvjq.com.au`) and your **login username + passcode** (the
+`SOSPhonerepairs` / `SITE_PASSWORD` account you use in the browser). The script signs in
+to `/api/login` and rides the session cookie from then on — re-authenticating by itself if
+it ever expires. All three live in Tampermonkey storage, so updates never wipe them.
 
 ### Setup Mode — pin exact products
 
@@ -256,12 +258,13 @@ Test it now: `RUN_NOW=1` in `.env`, restart, `docker compose logs -f scraper`.
 
 ## API
 
-Machine callers authenticate with `X-Key: <INGEST_KEY>`; browsers use the session cookie.
+The scraper authenticates with `X-Key: <INGEST_KEY>`; browsers and the Tampermonkey
+userscript use the login session cookie. Endpoints marked **key or session** take either.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
 | `GET /api/prices?grade=&store=` | key or session | The matrix |
-| `POST /api/ingest` | key | Push a batch of prices |
+| `POST /api/ingest` | key or session | Push a batch of prices |
 | `GET /api/config` | key or session | Devices, parts, queries, pins, schedule — for the scraper/TM |
 | `GET/POST/DELETE /api/pins` | key or session | Setup Mode pins |
 | `GET /api/stores`, `PUT/DELETE /api/stores/:id/calculator` | session (writes) | Per-store calculators |

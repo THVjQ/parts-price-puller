@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.0.1
+// @version      2.1.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,13 +22,16 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.0.1';
+  const SCRIPT_VERSION = '2.1.0';
   const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
-  // v2: these point at the self-hosted site, not Apps Script.
-  const getUrl = () => GM_getValue('siteUrl', DEFAULT_SITE);
-  const getKey = () => GM_getValue('ingestKey', '');
+  // v2.1: the script signs in the same way you do in a browser — the pricing site URL plus
+  // your login username + passcode (the SOSPhonerepairs account). No ingest key any more.
+  const getUrl  = () => GM_getValue('siteUrl', DEFAULT_SITE);
+  const getUser = () => GM_getValue('username', '');
+  const getPass = () => GM_getValue('passcode', '');
+  const isConfigured = () => Boolean(getUrl() && getUser() && getPass());
   // Which grade new pins belong to. Only the graded columns (LCD/OLED) use it — the
   // server decides, from parts.yml `graded:`. Empty = whatever settings.yml says.
   const getGrade = () => GM_getValue('grade', '');
@@ -84,17 +87,70 @@
   let abortFlag = false;
 
   // ---------------- Site comms ----------------
-  // The site authenticates machines with the X-Key header (INGEST_KEY). GM_xmlhttpRequest
-  // is cross-origin by design here, so no CORS dance and no site login cookie is needed.
-  function api(method, path, body) {
+  // The script talks to the pricing site exactly like a logged-in browser: it POSTs the
+  // username + passcode to /api/login, the site returns a signed `ppp_session` cookie, and
+  // every later call rides that session. GM_xmlhttpRequest goes through the browser network
+  // stack, so the Set-Cookie is stored for the pricing domain and sent back automatically —
+  // we also capture it and attach it explicitly, so it works even in a browser that has
+  // never opened the site itself.
+  const COOKIE_NAME = 'ppp_session';
+  const getSession = () => GM_getValue('session', '');
+
+  // Pull `ppp_session=…` out of a raw Set-Cookie response-header blob.
+  function grabSessionCookie(rawHeaders) {
+    const m = String(rawHeaders || '').match(new RegExp('set-cookie:\\s*' + COOKIE_NAME + '=([^;\\r\\n]+)', 'i'));
+    return m ? m[1] : '';
+  }
+
+  // Single-flight login: several calls that all hit a 401 at once share one login round-trip.
+  let loginPromise = null;
+  function login() {
+    if (loginPromise) return loginPromise;
+    loginPromise = new Promise((resolve, reject) => {
+      if (!isConfigured()) return reject(new Error('Not configured — click ⚙ Settings'));
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: getUrl() + '/api/login',
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify({ username: getUser(), password: getPass() }),
+        onload: r => {
+          let json = {};
+          try { json = JSON.parse(r.responseText); } catch (e) { /* may be empty */ }
+          if (r.status === 401) return reject(new Error('Wrong username or passcode — check ⚙ Settings.'));
+          if (r.status === 429) return reject(new Error(json.error || 'Too many login attempts — wait 15 minutes.'));
+          if (r.status >= 400) return reject(new Error(json.error || ('Login failed — HTTP ' + r.status)));
+          const cookie = grabSessionCookie(r.responseHeaders);
+          if (cookie) GM_setValue('session', cookie);
+          resolve(json);
+        },
+        onerror: () => reject(new Error('Network error reaching the site — is it in @connect and online?')),
+        ontimeout: () => reject(new Error('Login timed out')),
+        timeout: 60000,
+      });
+    }).finally(() => { loginPromise = null; });
+    return loginPromise;
+  }
+
+  // Authenticated call. Sends the stored session cookie; on a 401 it logs in once and
+  // replays the call, so an expired session heals itself without you touching Settings.
+  function api(method, path, body) { return apiCall(method, path, body, true); }
+  function apiCall(method, path, body, allowRelogin) {
     return new Promise((resolve, reject) => {
-      if (!getUrl() || !getKey()) return reject(new Error('Not configured — click ⚙ Settings'));
+      if (!isConfigured()) return reject(new Error('Not configured — click ⚙ Settings'));
+      const headers = { 'Content-Type': 'application/json' };
+      const sess = getSession();
+      if (sess) headers['Cookie'] = COOKIE_NAME + '=' + sess;
       GM_xmlhttpRequest({
         method,
         url: getUrl() + path,
-        headers: { 'Content-Type': 'application/json', 'X-Key': getKey() },
+        headers,
         data: body ? JSON.stringify(body) : undefined,
         onload: r => {
+          if (r.status === 401 && allowRelogin) {
+            // No session yet, or it expired — sign in, then replay this one call.
+            login().then(() => apiCall(method, path, body, false)).then(resolve, reject);
+            return;
+          }
           let json;
           try { json = JSON.parse(r.responseText); }
           catch (e) { return reject(new Error('HTTP ' + r.status + ' — not JSON: ' + String(r.responseText).slice(0, 200))); }
@@ -114,46 +170,51 @@
   const postRemovePin = (device, part, grade) => api('DELETE', '/api/pins', { device, part, grade, source: SITE.key });
 
   // ---------------- Debug: raw request + diagnosis ----------------
-  // Hits /api/config exactly like a real call but returns the untouched response
-  // (status, content-type, body) so a bad key / wrong host / login redirect is visible.
+  // Signs in, then hits /api/config exactly like a real call and shows the untouched
+  // response (status, content-type, body) so wrong login / wrong host / a login redirect
+  // are all visible.
   function rawTest(out) {
-    if (!getUrl() || !getKey()) { out('❌ Not configured. Click ⚙ Settings and enter the site URL + ingest key first.'); return; }
-    const realUrl = getUrl() + '/api/config';
-    out('⏳ GET ' + realUrl + '\n(X-Key: ***)\n…');
-    GM_xmlhttpRequest({
-      method: 'GET', url: realUrl,
-      headers: { 'Content-Type': 'application/json', 'X-Key': getKey() },
-      onload: r => {
-        const ct = (String(r.responseHeaders || '').match(/content-type:[^\r\n]*/i) || ['content-type: (none)'])[0].trim();
-        const finalUrl = r.finalUrl || '(unknown)';
-        const body = String(r.responseText || '');
-        let verdict;
-        if (r.status === 401) {
-          verdict = '⚠ 401 — the site rejected the key. It must match INGEST_KEY in the server .env exactly (no quotes, no spaces).';
-        } else if (/\/login/.test(finalUrl) || /<form[^>]*loginbox|Sign in/i.test(body)) {
-          verdict = '⚠ Got the login page. The URL is right but /api/config was not reached — check you pasted the site root (no /login, no trailing path).';
-        } else if (/^\s*</.test(body)) {
-          verdict = '⚠ Got HTML, not JSON. Usually the wrong host, or a Cloudflare error page in front of the site.';
-        } else {
-          try {
-            const j = JSON.parse(body);
-            verdict = j.error
-              ? '⚠ Site replied with an error: ' + j.error
-              : `✅ Connected — ${(j.devices || []).length} devices, ${(j.partLabels || []).length} parts, ${(j.pins || []).length} pins. If a pull still fails it is matching, not connectivity.`;
-          } catch (e) { verdict = '⚠ Response is neither HTML nor valid JSON: ' + e.message; }
-        }
-        out(
-          'HTTP ' + r.status + ' ' + (r.statusText || '') + '\n' +
-          'final URL: ' + finalUrl + '\n' +
-          ct + '\n' +
-          '────────────\n' + verdict + '\n────────────\n' +
-          body.slice(0, 1200) + (body.length > 1200 ? '\n…(' + body.length + ' bytes total)' : '')
-        );
-      },
-      onerror:   r => out('❌ Network error (is @connect allowed / URL reachable?)\n' + JSON.stringify(r).slice(0, 300)),
-      ontimeout: () => out('❌ Timed out after 60s.'),
-      timeout: 60000,
-    });
+    if (!isConfigured()) { out('❌ Not configured. Click ⚙ Settings and enter the site URL, username and passcode first.'); return; }
+    out('⏳ Signing in…');
+    login().then(() => {
+      const realUrl = getUrl() + '/api/config';
+      out('⏳ GET ' + realUrl + '\n(session cookie)\n…');
+      const sess = getSession();
+      GM_xmlhttpRequest({
+        method: 'GET', url: realUrl,
+        headers: Object.assign({ 'Content-Type': 'application/json' }, sess ? { 'Cookie': COOKIE_NAME + '=' + sess } : {}),
+        onload: r => {
+          const ct = (String(r.responseHeaders || '').match(/content-type:[^\r\n]*/i) || ['content-type: (none)'])[0].trim();
+          const finalUrl = r.finalUrl || '(unknown)';
+          const body = String(r.responseText || '');
+          let verdict;
+          if (r.status === 401) {
+            verdict = '⚠ 401 — the session was rejected. Your username/passcode may be wrong, or the login cookie did not stick. Re-enter them in ⚙ Settings.';
+          } else if (/\/login/.test(finalUrl) || /<form[^>]*loginbox|Sign in/i.test(body)) {
+            verdict = '⚠ Got the login page. The URL is right but /api/config was not reached — check you pasted the site root (no /login, no trailing path).';
+          } else if (/^\s*</.test(body)) {
+            verdict = '⚠ Got HTML, not JSON. Usually the wrong host, or a Cloudflare error page in front of the site.';
+          } else {
+            try {
+              const j = JSON.parse(body);
+              verdict = j.error
+                ? '⚠ Site replied with an error: ' + j.error
+                : `✅ Connected — ${(j.devices || []).length} devices, ${(j.partLabels || []).length} parts, ${(j.pins || []).length} pins. If a pull still fails it is matching, not connectivity.`;
+            } catch (e) { verdict = '⚠ Response is neither HTML nor valid JSON: ' + e.message; }
+          }
+          out(
+            'HTTP ' + r.status + ' ' + (r.statusText || '') + '\n' +
+            'final URL: ' + finalUrl + '\n' +
+            ct + '\n' +
+            '────────────\n' + verdict + '\n────────────\n' +
+            body.slice(0, 1200) + (body.length > 1200 ? '\n…(' + body.length + ' bytes total)' : '')
+          );
+        },
+        onerror:   r => out('❌ Network error (is @connect allowed / URL reachable?)\n' + JSON.stringify(r).slice(0, 300)),
+        ontimeout: () => out('❌ Timed out after 60s.'),
+        timeout: 60000,
+      });
+    }).catch(e => out('❌ Sign-in failed: ' + e.message));
   }
 
   // ---------------- Debug: capture a real search ----------------
@@ -430,7 +491,7 @@
   // ---------------- Scheduled auto-run (only works while a tab is open) ----------------
   async function scheduleCheck() {
     try {
-      if (running || !getUrl() || !getKey()) return;
+      if (running || !isConfigured()) return;
       if (!CONFIG) CONFIG = await getConfig().catch(() => null);
       if (!CONFIG || CONFIG.error) return;
       const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -809,7 +870,7 @@
           <button id="ppp-pull">▶ Pull pinned prices (${host})</button>
           <button id="ppp-abort" class="sec">■ Abort</button>
           <button id="ppp-open" class="sec">🔗 Open pricing site</button>
-          <button id="ppp-settings" class="sec">⚙ Settings (site URL + key)</button>
+          <button id="ppp-settings" class="sec">⚙ Settings (site URL + login)</button>
           <div id="ppp-status">Idle. Site: ${SITE.key}</div>
           <details id="ppp-debugbox">
             <summary>🐛 Debug</summary>
@@ -853,14 +914,16 @@
       el.querySelector('#ppp-debugbox').open = true; debug('Capturing…'); captureSearch(q.trim(), debug);
     };
     el.querySelector('#ppp-info').onclick = () => {
-      const u = getUrl(), k = getKey();
+      const u = getUrl(), user = getUser();
       debug(
         'Script version: ' + SCRIPT_VERSION + '\n' +
         'Supplier: ' + SITE.key + ' (' + host + ')\n' +
         'Pricing site: ' + (u || '(none)') + '\n' +
-        'Ingest key: ' + (k ? 'set, ' + k.length + ' chars, ends …' + k.slice(-4) : '⚠ NOT SET') + '\n' +
+        'Username: ' + (user || '⚠ NOT SET') + '\n' +
+        'Passcode: ' + (getPass() ? 'set (' + getPass().length + ' chars)' : '⚠ NOT SET') + '\n' +
+        'Session: ' + (getSession() ? 'active' : 'none yet — signs in on first call') + '\n' +
         'Grade for new pins: ' + (getGrade() || '(site default)') + '\n' +
-        'Endpoints: GET /api/config · POST /api/ingest · POST/DELETE /api/pins'
+        'Endpoints: POST /api/login · GET /api/config · POST /api/ingest · POST/DELETE /api/pins'
       );
     };
     el.querySelector('#ppp-copy').onclick = () => {
@@ -874,14 +937,21 @@
     el.querySelector('#ppp-settings').onclick = () => {
       const u = prompt('Pricing site URL (root, no trailing path):', getUrl());
       if (u === null) return;
-      const k = prompt('Ingest key (matches INGEST_KEY in the site\'s .env):', getKey());
-      if (k === null) return;
+      const user = prompt('Username (your pricing-site login, e.g. SOSPhonerepairs):', getUser());
+      if (user === null) return;
+      const pass = prompt('Passcode (your pricing-site login passcode):', getPass());
+      if (pass === null) return;
       const cleanUrl = cleanSiteUrl(u);
       GM_setValue('siteUrl', cleanUrl);
-      GM_setValue('ingestKey', k.trim());
+      GM_setValue('username', user.trim());
+      GM_setValue('passcode', pass);
+      GM_setValue('session', '');   // force a fresh sign-in with the new details
       CONFIG = null;
-      status(cleanUrl && k.trim() ? 'Saved: ' + cleanUrl : '⚠ Not configured');
-      loadGrade();
+      if (!isConfigured()) { status('⚠ Not configured'); return; }
+      status('Saved — signing in to ' + cleanUrl + ' …');
+      login()
+        .then(() => { status('✅ Signed in to ' + cleanUrl); loadGrade(); })
+        .catch(e => status('❌ ' + e.message));
     };
 
     // The grade is a LOCAL choice: it decides which per-grade column a pin lands in.
@@ -892,7 +962,7 @@
     };
 
     function loadGrade() {
-      if (!getUrl() || !getKey()) { status('⚠ Not configured — click ⚙ Settings'); return; }
+      if (!isConfigured()) { status('⚠ Not configured — click ⚙ Settings'); return; }
       getConfig().then(c => {
         if (!c || c.error) return status('⚠ ' + ((c && c.error) || 'no config'));
         CONFIG = c;
