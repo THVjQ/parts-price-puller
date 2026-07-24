@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.1.0
+// @version      2.2.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,7 +22,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.1.0';
+  const SCRIPT_VERSION = '2.2.0';
   const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
@@ -87,20 +87,12 @@
   let abortFlag = false;
 
   // ---------------- Site comms ----------------
-  // The script talks to the pricing site exactly like a logged-in browser: it POSTs the
-  // username + passcode to /api/login, the site returns a signed `ppp_session` cookie, and
-  // every later call rides that session. GM_xmlhttpRequest goes through the browser network
-  // stack, so the Set-Cookie is stored for the pricing domain and sent back automatically —
-  // we also capture it and attach it explicitly, so it works even in a browser that has
-  // never opened the site itself.
-  const COOKIE_NAME = 'ppp_session';
+  // The script signs in with username + passcode at /api/login and the site returns a
+  // signed session TOKEN in the JSON body. We store it and send it on every call in an
+  // `X-PPP-Session` header. (We deliberately do NOT use the login cookie: it is SameSite=Lax
+  // and HttpOnly, so a browser won't send it on the userscript's cross-site calls to the
+  // site — a header token is the reliable cross-origin path.)
   const getSession = () => GM_getValue('session', '');
-
-  // Pull `ppp_session=…` out of a raw Set-Cookie response-header blob.
-  function grabSessionCookie(rawHeaders) {
-    const m = String(rawHeaders || '').match(new RegExp('set-cookie:\\s*' + COOKIE_NAME + '=([^;\\r\\n]+)', 'i'));
-    return m ? m[1] : '';
-  }
 
   // Single-flight login: several calls that all hit a 401 at once share one login round-trip.
   let loginPromise = null;
@@ -119,8 +111,8 @@
           if (r.status === 401) return reject(new Error('Wrong username or passcode — check ⚙ Settings.'));
           if (r.status === 429) return reject(new Error(json.error || 'Too many login attempts — wait 15 minutes.'));
           if (r.status >= 400) return reject(new Error(json.error || ('Login failed — HTTP ' + r.status)));
-          const cookie = grabSessionCookie(r.responseHeaders);
-          if (cookie) GM_setValue('session', cookie);
+          if (!json.token) return reject(new Error('Signed in, but the site sent no session token — the site may need its latest update (wait a few minutes and retry).'));
+          GM_setValue('session', json.token);
           resolve(json);
         },
         onerror: () => reject(new Error('Network error reaching the site — is it in @connect and online?')),
@@ -131,7 +123,7 @@
     return loginPromise;
   }
 
-  // Authenticated call. Sends the stored session cookie; on a 401 it logs in once and
+  // Authenticated call. Sends the stored session token; on a 401 it logs in once and
   // replays the call, so an expired session heals itself without you touching Settings.
   function api(method, path, body) { return apiCall(method, path, body, true); }
   function apiCall(method, path, body, allowRelogin) {
@@ -139,7 +131,7 @@
       if (!isConfigured()) return reject(new Error('Not configured — click ⚙ Settings'));
       const headers = { 'Content-Type': 'application/json' };
       const sess = getSession();
-      if (sess) headers['Cookie'] = COOKIE_NAME + '=' + sess;
+      if (sess) headers['X-PPP-Session'] = sess;
       GM_xmlhttpRequest({
         method,
         url: getUrl() + path,
@@ -178,18 +170,18 @@
     out('⏳ Signing in…');
     login().then(() => {
       const realUrl = getUrl() + '/api/config';
-      out('⏳ GET ' + realUrl + '\n(session cookie)\n…');
+      out('⏳ GET ' + realUrl + '\n(X-PPP-Session token)\n…');
       const sess = getSession();
       GM_xmlhttpRequest({
         method: 'GET', url: realUrl,
-        headers: Object.assign({ 'Content-Type': 'application/json' }, sess ? { 'Cookie': COOKIE_NAME + '=' + sess } : {}),
+        headers: Object.assign({ 'Content-Type': 'application/json' }, sess ? { 'X-PPP-Session': sess } : {}),
         onload: r => {
           const ct = (String(r.responseHeaders || '').match(/content-type:[^\r\n]*/i) || ['content-type: (none)'])[0].trim();
           const finalUrl = r.finalUrl || '(unknown)';
           const body = String(r.responseText || '');
           let verdict;
           if (r.status === 401) {
-            verdict = '⚠ 401 — the session was rejected. Your username/passcode may be wrong, or the login cookie did not stick. Re-enter them in ⚙ Settings.';
+            verdict = '⚠ 401 — the session was rejected. Your username/passcode may be wrong, or the site has not picked up its latest update yet (wait a few minutes). Re-enter them in ⚙ Settings if needed.';
           } else if (/\/login/.test(finalUrl) || /<form[^>]*loginbox|Sign in/i.test(body)) {
             verdict = '⚠ Got the login page. The URL is right but /api/config was not reached — check you pasted the site root (no /login, no trailing path).';
           } else if (/^\s*</.test(body)) {
@@ -535,7 +527,7 @@
       const btn = document.createElement('button');
       btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
       btn.title = 'Pin this product to a price cell';
-      btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
+      btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); quickPin(a, card); });
       // Warm the search cache while the pointer is on the button, so the click feels instant.
       let preTimer;
       btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => {
@@ -600,6 +592,17 @@
     if (best) for (const o of sel.options) if ((o.value || '').toLowerCase() === best) { sel.value = o.value; return o.value; }
     return sel.value;
   }
+  // Same "most specific wins" match, but standalone — returns the device object (or null)
+  // so one-click pinning can decide whether the row is unambiguous without a dropdown.
+  function detectDevice(title, devices) {
+    const t = (title || '').toLowerCase();
+    let best = null, bestLen = 0;
+    for (const d of devices) {
+      const v = (d.name || '').toLowerCase();
+      if (v && t.includes(v) && v.length > bestLen) { best = d; bestLen = v.length; }
+    }
+    return best;
+  }
   // Guess the part column from the title (order matters — most specific first).
   const PART_HINTS = [
     ['BACK_GLASS', /back glass|rear glass|back cover|battery cover/],
@@ -659,6 +662,41 @@
     }
     pinWorking = false;
     updatePinToast();
+  }
+
+  // One-click pin. If the tile gives an unambiguous read — a known device (row), a known
+  // part (column), and exactly ONE variant of the clicked product — pin it straight away,
+  // no dialog. Anything uncertain (unknown row/column, product not found in search, or
+  // several variants to choose between) falls back to the full modal so you sort it by hand.
+  async function quickPin(anchor, card) {
+    const btn = card.querySelector('.ppp-pin-btn');
+    const info = tileInfo(anchor, card);
+    await ensureConfig();
+    const devices = (CONFIG && CONFIG.devices) || [];
+    const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
+    const partKeys = new Set(parts.map(p => String(p.key).toUpperCase()));
+
+    const device = detectDevice(info.title, devices);
+    const partKey = detectPart(info.title);
+    // No confident row/column, or no product id to lock onto → let the user decide.
+    if (!device || !partKey || !partKeys.has(partKey.toUpperCase()) || !info.hintId) return openPinModal(anchor, card);
+
+    if (btn) btn.textContent = '⏳ Pinning';
+    let candidates;
+    try { candidates = await searchProducts(info.title, 12); }
+    catch (e) { if (btn) btn.textContent = '📌 Pin'; return openPinModal(anchor, card); }
+
+    // The exact product you clicked, matched by its stable id. One variant = unambiguous;
+    // zero (not found) or several (a choice to make) → open the modal instead.
+    const matches = candidates.filter(c => String(c.productId) === String(info.hintId));
+    if (matches.length !== 1) { if (btn) btn.textContent = '📌 Pin'; return openPinModal(anchor, card); }
+
+    const chosen = matches[0];
+    enqueuePin({
+      device: device.name, part: partKey, grade: getGrade() || (CONFIG && CONFIG.grade) || '',
+      productId: chosen.productId, variantId: chosen.variantId,
+      title: chosen.title, price: chosen.price, url: chosen.url,
+    }, btn);
   }
 
   // Modal: auto-detects device + part from the tile, lists the EXACT product/variant options

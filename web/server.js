@@ -86,9 +86,11 @@ app.post('/api/login', (req, res) => {
   const ok = auth.checkLogin(b.username, b.password);
   auth.noteAttempt(ip, ok);
   if (!ok) return res.status(401).json({ error: 'Wrong username or password.' });
-  auth.setSession(req, res);
+  const token = auth.setSession(req, res);
   db.log('web', '', 'Login from ' + ip);
-  res.json({ ok: true });
+  // token also returned in the body so the userscript can send it as an X-PPP-Session
+  // header — cross-site calls can't rely on the SameSite=Lax cookie.
+  res.json({ ok: true, token });
 });
 
 app.post('/api/logout', (req, res) => { auth.clearSession(req, res); res.json({ ok: true }); });
