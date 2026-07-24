@@ -114,10 +114,14 @@ CREATE TABLE IF NOT EXISTS custom_parts (
   key     TEXT NOT NULL UNIQUE,
   label   TEXT NOT NULL,
   query   TEXT NOT NULL DEFAULT '',
+  family  TEXT NOT NULL DEFAULT '',   -- '' = all families; 'ipad' = iPad only, etc.
   enabled INTEGER NOT NULL DEFAULT 1,
   ts      TEXT NOT NULL
 );
 `);
+
+// Schema migration: add family column to existing databases that predate it.
+try { db.exec(`ALTER TABLE custom_parts ADD COLUMN family TEXT NOT NULL DEFAULT ''`); } catch (e) {}
 
 const nowIso = () => new Date().toISOString();
 
@@ -265,11 +269,14 @@ const setCustomDeviceEnabledStmt = db.prepare(`UPDATE custom_devices SET enabled
 
 // ─────────────────────────────────────────────────────── custom parts
 const addCustomPartStmt = db.prepare(`
-  INSERT INTO custom_parts (key, label, query, enabled, ts)
-  VALUES (@key, @label, @query, 1, @ts)
-  ON CONFLICT (key) DO UPDATE SET label=excluded.label, query=excluded.query, ts=excluded.ts
+  INSERT INTO custom_parts (key, label, query, family, enabled, ts)
+  VALUES (@key, @label, @query, @family, 1, @ts)
+  ON CONFLICT (key) DO UPDATE SET label=excluded.label, query=excluded.query, family=excluded.family, ts=excluded.ts
 `);
 const listCustomPartsStmt  = db.prepare(`SELECT * FROM custom_parts WHERE enabled = 1 ORDER BY id`);
+const listCustomPartsForFamilyStmt = db.prepare(
+  `SELECT * FROM custom_parts WHERE enabled = 1 AND (family = '' OR family = ?) ORDER BY id`
+);
 const deleteCustomPartStmt = db.prepare(`DELETE FROM custom_parts WHERE id = ?`);
 
 // ─────────────────────────────────────────────────────────── cell flags
@@ -317,6 +324,7 @@ module.exports = {
   setCustomDeviceEnabled: (id, on) => setCustomDeviceEnabledStmt.run(on ? 1 : 0, id).changes,
   addCustomPart: r => addCustomPartStmt.run(r),
   listCustomParts: () => listCustomPartsStmt.all(),
+  listCustomPartsForFamily: fam => listCustomPartsForFamilyStmt.all(fam || ''),
   deleteCustomPart: id => deleteCustomPartStmt.run(id).changes,
   setFlag: r => setFlagStmt.run(r),
   clearFlag: (d, p, f) => clearFlagStmt.run(d, p, f).changes,

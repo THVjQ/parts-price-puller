@@ -1166,10 +1166,11 @@
     const msg = $('#ncMsg');
     if (!label) { msg.textContent = 'Enter a label.'; return; }
     const key = $('#ncKey').value.trim() || label.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    const family = state.family || (state.data.groups[0] && state.data.groups[0].id) || '';
     try {
-      await api('POST', '/api/parts', { key, label });
+      await api('POST', '/api/parts', { key, label, family });
       $('#ncLabel').value = ''; $('#ncKey').value = '';
-      msg.textContent = '✓ Added column ' + label;
+      msg.textContent = '✓ Added column ' + label + ' to ' + (family || 'all families');
       await loadMatrix();
       await refreshColumnOrderList();
     } catch (e) { msg.textContent = '✗ ' + e.message; }

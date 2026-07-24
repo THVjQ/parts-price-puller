@@ -403,14 +403,15 @@ app.post('/api/parts', requireSession, (req, res) => {
   if (!label) return res.status(400).json({ error: 'label is required' });
   const key = (clean(b.key) || label.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')).slice(0, 40);
   if (!key) return res.status(400).json({ error: 'invalid key' });
+  const family = clean(b.family || '').slice(0, 40);  // '' = all families
   const cfg = config.get();
   if (cfg.parts.some(p => p.key.toLowerCase() === key.toLowerCase())) {
     return res.status(409).json({ error: 'conflicts with a built-in column key' });
   }
   try {
-    db.addCustomPart({ key, label, query: clean(b.query) || '', ts: nowIso() });
+    db.addCustomPart({ key, label, query: clean(b.query) || '', family, ts: nowIso() });
     reindex();
-    db.log('web', '', `Custom column added: ${key} (${label})`);
+    db.log('web', '', `Custom column added: ${key} (${label}) family=${family || 'all'}`);
     res.json({ ok: true, parts: db.listCustomParts() });
   } catch (e) {
     if (e.message.includes('UNIQUE')) return res.status(409).json({ error: 'a column with that key already exists' });
@@ -543,16 +544,17 @@ app.get('/api/prices', requireKeyOrSession, (req, res) => {
 
   // Each family shows only its own columns (iPad = LCD + Digitiser, phones = the full
   // set, …). Custom parts appear in every family; stored column order applied per-family.
-  const allParts = effectiveParts(cfg);
+  const allParts = effectiveParts(cfg);  // global — used for partByKey and allKeys fallback
   const partByKey = new Map(allParts.map(p => [p.key, p]));
-  const customPartKeys = new Set(db.listCustomParts().map(p => p.key));
   const columnOrderPref = db.getPref('column_order', {});
   const deviceOrderPref = db.getPref('device_order', {});
 
-  // Build ordered groups: git columns + custom, then apply stored ordering
+  // Build ordered groups: git columns + this-family custom cols, then apply stored ordering.
+  // Custom columns are scoped to the family they were added in (family='' means all families).
   const groups = cfg.groups.map(g => {
-    const gitCols = g.parts || allParts.map(p => p.key);
-    const extra = allParts.filter(p => customPartKeys.has(p.key) && !gitCols.includes(p.key)).map(p => p.key);
+    const gitCols = g.parts || cfg.parts.map(p => p.key);
+    const familyCustomKeys = new Set(db.listCustomPartsForFamily(g.id).map(p => p.key));
+    const extra = allParts.filter(p => familyCustomKeys.has(p.key) && !gitCols.includes(p.key)).map(p => p.key);
     let cols = [...gitCols, ...extra];
     const storedOrder = columnOrderPref[g.id];
     if (storedOrder && storedOrder.length) {
