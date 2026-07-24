@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.3.0
+// @version      2.4.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,7 +22,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.2.0';
+  const SCRIPT_VERSION = '2.4.0';
   const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
@@ -519,7 +519,9 @@
   // Tag each product tile (found by its detail link) with a 📌 button.
   function decorateAllTiles() {
     if (!setupMode) return;
-    document.querySelectorAll('a[href*="/products/detail/"]').forEach(a => {
+    // Broader selector — CrazyParts uses /products/detail/ on most pages but some views
+    // use /products/ with other sub-paths. Deduplication via .ppp-carded on the card.
+    document.querySelectorAll('a[href*="/products/detail/"], a[href*="/products/view/"], a[href*="/product/detail/"]').forEach(a => {
       const card = a.closest('li, article, [class*="card" i], [class*="product" i], [class*="item" i]') || a.parentElement;
       if (!card || card.classList.contains('ppp-carded')) return;
       card.classList.add('ppp-carded');
@@ -528,7 +530,13 @@
       btn.className = 'ppp-pin-btn'; btn.type = 'button'; btn.textContent = '📌 Pin';
       btn.title = 'Pin this product to a price cell';
       btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); quickPin(a, card); });
-      btn.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); openPinModal(a, card); });
+      // Capture phase + stopImmediatePropagation: fires before any site contextmenu handler;
+      // ensureConfig() pre-loads the device/part list so dropdowns are ready when modal opens.
+      btn.addEventListener('contextmenu', async ev => {
+        ev.preventDefault(); ev.stopImmediatePropagation();
+        await ensureConfig().catch(() => {});
+        openPinModal(a, card);
+      }, true);
       // Warm the search cache while the pointer is on the button, so the click feels instant.
       let preTimer;
       btn.addEventListener('mouseenter', () => { preTimer = setTimeout(() => {
@@ -741,23 +749,43 @@
       try { const c = await getConfig(); if (c && !c.error) CONFIG = c; } catch (e) { statusEl.textContent = '❌ Could not reach site: ' + e.message + ' — check ⚙ Settings URL and that you are logged in.'; }
       if (!pinModalEl) return; // user closed it while we awaited
     }
-    const devices = (CONFIG && CONFIG.devices) || [];
-    const parts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
-    if (!devices.length || !parts.length) {
-      statusEl.textContent = '⚠ Device/part list empty. Open ⚙ Settings and verify the Site URL points to your pricing site, then try again.';
-      devSel.add(new Option('— configure site URL in ⚙ Settings —', ''));
-      partSel.add(new Option('— configure site URL in ⚙ Settings —', ''));
+    const activeGrade = getGrade() || (CONFIG && CONFIG.grade) || '';
+
+    function populateDropdowns() {
+      const devs = (CONFIG && CONFIG.devices) || [];
+      const pts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
+      while (devSel.options.length) devSel.remove(0);
+      while (partSel.options.length) partSel.remove(0);
+      devs.forEach(d => devSel.add(new Option(d.name, d.name)));
+      pts.forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', activeGrade), p.key)));
+      if (devs.length) { preselectDevice(devSel, info.title); }
+      const pg = detectPart(info.title); if (pg && devs.length) partSel.value = pg;
+      return devs.length > 0 && pts.length > 0;
+    }
+
+    const loaded = populateDropdowns();
+    if (!loaded) {
+      statusEl.innerHTML = '⚠ Could not load device/part list. ' +
+        '<button style="display:inline;width:auto;padding:2px 8px;margin:0 0 0 4px" id="ppp-retry-cfg">↻ Retry</button>';
+      document.getElementById('ppp-retry-cfg').onclick = async () => {
+        if (!pinModalEl) return;
+        statusEl.textContent = '⏳ Retrying…';
+        try { CONFIG = await getConfig(); } catch (e) { statusEl.textContent = '❌ ' + e.message; return; }
+        if (!pinModalEl) return;
+        if (populateDropdowns()) {
+          statusEl.textContent = '';
+          seedInput.value = info.title || ((devSel.value || '') + ' ' + (detectPart(info.title) || '')).trim();
+          doSearch();
+        } else { statusEl.textContent = '⚠ Still empty — verify Site URL in ⚙ Settings.'; }
+      };
+      devSel.add(new Option('— tap ↻ Retry above, or check ⚙ Settings —', ''));
+      partSel.add(new Option('— tap ↻ Retry above, or check ⚙ Settings —', ''));
     } else if (statusEl.textContent.startsWith('⏳')) {
       statusEl.textContent = '';
     }
-    const activeGrade = getGrade() || (CONFIG && CONFIG.grade) || '';
-    devices.forEach(d => devSel.add(new Option(d.name, d.name)));
-    parts.forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', activeGrade), p.key)));
-    preselectDevice(devSel, info.title);              // auto model
-    const partGuess = detectPart(info.title);          // auto type
-    if (partGuess) partSel.value = partGuess;
+
     // Seed the (editable) search box — detected title, else "device + part".
-    seedInput.value = info.title || ((devSel.value || '') + ' ' + (partGuess || '')).trim();
+    seedInput.value = info.title || ((devSel.value || '') + ' ' + (detectPart(info.title) || '')).trim();
 
     // Rank matches: the tile's own product first, then title contains device + grade, then cheapest.
     function renderCandidates() {
