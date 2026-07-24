@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Parts Price Puller
 // @namespace    https://github.com/THVjQ
-// @version      2.5.0
+// @version      2.6.0
 // @description  Pulls logged-in CrazyParts wholesale prices into the self-hosted SOS pricing site
 // @author       THVjQ
 // @homepageURL  https://github.com/THVjQ/parts-price-puller
@@ -22,7 +22,7 @@
 
 (function () {
   'use strict';
-  const SCRIPT_VERSION = '2.5.0';
+  const SCRIPT_VERSION = '2.6.0';
   const DEFAULT_SITE = 'https://pricing.thvjq.com.au';
 
   // Settings live in GM storage (⚙ button in panel) so script updates never wipe them.
@@ -721,7 +721,7 @@
     el.innerHTML =
       '<div class="ppp-modal-box"><div class="ppp-modal-hd">📌 Pin product to a price cell' +
       '<span class="ppp-modal-x">✕</span></div><div class="ppp-modal-bd">' +
-      '<label>Device (row)</label><select class="ppp-m-device"></select>' +
+      '<label>Device(s) — tick all rows this product covers</label><div class="ppp-dev-list"></div>' +
       '<label>Part (column)</label><select class="ppp-m-part"></select>' +
       '<label>Search products (edit if wrong, then Enter)</label>' +
       '<div class="ppp-seed-row"><input class="ppp-m-seed" placeholder="e.g. iphone 11 lcd"><button class="ppp-m-research sec">🔍</button></div>' +
@@ -733,7 +733,7 @@
     document.body.appendChild(el);
     pinModalEl = el;
 
-    const devSel = el.querySelector('.ppp-m-device');
+    const devList = el.querySelector('.ppp-dev-list');
     const partSel = el.querySelector('.ppp-m-part');
     const seedInput = el.querySelector('.ppp-m-seed');
     const candsEl = el.querySelector('.ppp-cands');
@@ -757,11 +757,26 @@
     function populateDropdowns() {
       const devs = (CONFIG && CONFIG.devices) || [];
       const pts = (CONFIG && CONFIG.partLabels) || (((CONFIG && CONFIG.parts) || []).map(k => ({ key: k, label: k })));
-      while (devSel.options.length) devSel.remove(0);
+      // Build device checkbox list
+      devList.innerHTML = '';
+      devs.forEach(d => {
+        const lbl = document.createElement('label');
+        lbl.className = 'ppp-dev-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.value = d.name;
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(' ' + d.name));
+        devList.appendChild(lbl);
+      });
+      // Auto-check the most specific device that matches the tile title
+      if (devs.length) {
+        const t = (info.title || '').toLowerCase();
+        let bestName = '', bestLen = 0;
+        devs.forEach(d => { const v = d.name.toLowerCase(); if (v && t.includes(v) && v.length > bestLen) { bestName = d.name; bestLen = v.length; } });
+        if (bestName) for (const cb of devList.querySelectorAll('input')) { if (cb.value === bestName) { cb.checked = true; break; } }
+      }
       while (partSel.options.length) partSel.remove(0);
-      devs.forEach(d => devSel.add(new Option(d.name, d.name)));
       pts.forEach(p => partSel.add(new Option(String(p.label || p.key).replace('{grade}', activeGrade), p.key)));
-      if (devs.length) { preselectDevice(devSel, info.title); }
       const pg = detectPart(info.title); if (pg && devs.length) partSel.value = pg;
       return devs.length > 0 && pts.length > 0;
     }
@@ -781,7 +796,10 @@
           doSearch();
         } else { statusEl.textContent = '⚠ Still empty — verify Site URL in ⚙ Settings.'; }
       };
-      devSel.add(new Option('— tap ↻ Retry above, or check ⚙ Settings —', ''));
+      const errNote = document.createElement('div');
+      errNote.style.cssText = 'color:#e94560;padding:4px 6px;font-size:11px';
+      errNote.textContent = '— tap ↻ Retry above, or check ⚙ Settings —';
+      devList.appendChild(errNote);
       partSel.add(new Option('— tap ↻ Retry above, or check ⚙ Settings —', ''));
     } else if (statusEl.textContent.startsWith('⏳')) {
       statusEl.textContent = '';
@@ -792,7 +810,8 @@
 
     // Rank matches: the tile's own product first, then title contains device + grade, then cheapest.
     function renderCandidates() {
-      const devV = (devSel.value || '').toLowerCase(), gradeGuess = detectGrade(seedInput.value);
+      const firstChecked = devList.querySelector('input:checked');
+      const devV = (firstChecked ? firstChecked.value : '').toLowerCase(), gradeGuess = detectGrade(seedInput.value);
       const score = c => { let s = 0; const t = (c.title || '').toLowerCase();
         if (info.hintId && c.productId === info.hintId) s += 1000;
         if (devV && t.includes(devV)) s += 20;
@@ -836,21 +855,21 @@
     }
     el.querySelector('.ppp-m-research').onclick = doSearch;
     seedInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); doSearch(); } });
-    devSel.addEventListener('change', () => { if (candidates.length) renderCandidates(); }); // re-sort on model change
+    devList.addEventListener('change', () => { if (candidates.length) renderCandidates(); }); // re-sort on model change
     doSearch();
 
     saveBtn.onclick = () => {
       if (!chosen) { statusEl.textContent = 'Pick the exact product/variant first.'; return; }
-      if (!devSel.value || !partSel.value) { statusEl.textContent = 'Choose a device and a part first.'; return; }
-      // Queue it and close immediately — saving runs in the background (progress bar up top),
-      // so you can jump straight to pinning the next product.
+      const selectedDevices = [...devList.querySelectorAll('input:checked')].map(c => c.value);
+      if (!selectedDevices.length || !partSel.value) { statusEl.textContent = 'Tick at least one device and choose a part first.'; return; }
+      // Queue one pin per selected device; close immediately — toast bar shows progress.
       const cardBtn = card.querySelector('.ppp-pin-btn');
       if (cardBtn) cardBtn.textContent = '⏳ Pinning';
-      enqueuePin({
-        device: devSel.value, part: partSel.value, grade: activeGrade,
+      selectedDevices.forEach(device => enqueuePin({
+        device, part: partSel.value, grade: activeGrade,
         productId: chosen.productId, variantId: chosen.variantId,
         title: chosen.title, price: chosen.price, url: chosen.url,
-      }, cardBtn);
+      }, selectedDevices.length === 1 ? cardBtn : null));
       closePinModal();
     };
   }
@@ -930,6 +949,21 @@
         .ppp-modal-bd button.sec{background:#0f3460}
         .ppp-modal-bd button:disabled{opacity:.5;cursor:default}
         .ppp-modal-status{margin-top:8px;color:#a0c4ff;min-height:18px;word-break:break-word}
+        /* Device checkbox list (replaces single select) */
+        .ppp-dev-list{max-height:130px;overflow-y:auto;border:1px solid #0f3460;border-radius:4px;
+          padding:2px;margin-top:2px;background:#0d1117}
+        .ppp-dev-item{display:flex;align-items:center;padding:3px 6px;border-radius:3px;
+          cursor:pointer;user-select:none}
+        .ppp-dev-item:hover{background:#0d1a33}
+        .ppp-dev-item input{margin:0 7px 0 0;cursor:pointer;accent-color:#f0a500}
+        /* Saved pins panel section */
+        .ppp-pin-row{display:flex;align-items:flex-start;gap:5px;padding:4px 0;
+          border-bottom:1px solid #0a2040;font-size:11px}
+        .ppp-pin-row:last-child{border-bottom:0}
+        .ppp-pin-del{width:auto!important;padding:1px 6px!important;margin:0!important;
+          background:#2a0a0a!important;color:#e94560!important;flex-shrink:0}
+        .ppp-pin-dev{color:#f0a500;font-weight:bold;white-space:nowrap;margin-right:2px;min-width:60px}
+        .ppp-pin-meta{flex:1;color:#aaa;line-height:1.4;word-break:break-all}
         /* Top progress bar for background pinning */
         #ppp-toast{position:fixed;top:0;left:0;right:0;z-index:1000002;background:#0f3460;color:#fff;
           font:12px/1.4 monospace;padding:6px 12px 0;box-shadow:0 2px 10px rgba(0,0,0,.4)}
@@ -949,6 +983,11 @@
           <button id="ppp-open" class="sec">🔗 Open pricing site</button>
           <button id="ppp-settings" class="sec">⚙ Settings (site URL + login)</button>
           <div id="ppp-status">Idle. Site: ${SITE.key}</div>
+          <details id="ppp-pinsbox">
+            <summary>📌 Saved pins</summary>
+            <div id="ppp-pins-list" style="max-height:200px;overflow-y:auto;margin-top:4px"></div>
+            <button id="ppp-pins-refresh" class="sec" style="margin-top:4px">↻ Refresh list</button>
+          </details>
           <details id="ppp-debugbox">
             <summary>🐛 Debug</summary>
             <button id="ppp-test" class="sec">Test connection (raw)</button>
@@ -1030,6 +1069,39 @@
         .then(() => { status('✅ Signed in to ' + cleanUrl); loadGrade(); })
         .catch(e => status('❌ ' + e.message));
     };
+
+    // ── Saved pins panel ──
+    const pinsBox = el.querySelector('#ppp-pinsbox');
+    const pinsListEl = el.querySelector('#ppp-pins-list');
+    async function loadPins() {
+      pinsListEl.textContent = 'Loading…';
+      try {
+        const r = await api('GET', '/api/pins');
+        const pins = (r.pins || []).sort((a, b) => a.device.localeCompare(b.device) || a.part.localeCompare(b.part));
+        pinsListEl.innerHTML = '';
+        if (!pins.length) { pinsListEl.textContent = 'No pins saved yet.'; return; }
+        pins.forEach(p => {
+          const row = document.createElement('div'); row.className = 'ppp-pin-row';
+          const del = document.createElement('button'); del.className = 'ppp-pin-del'; del.textContent = '✕';
+          del.title = 'Remove pin for ' + p.device + ' / ' + p.part;
+          del.onclick = async () => {
+            del.disabled = true; del.textContent = '…';
+            try {
+              await api('DELETE', '/api/pins', { device: p.device, part: p.part, grade: p.grade || '', source: p.source || 'CP' });
+              row.remove();
+              if (!pinsListEl.children.length) pinsListEl.textContent = 'No pins saved yet.';
+            } catch (e) { del.disabled = false; del.textContent = '✕'; status('Remove failed: ' + e.message); }
+          };
+          const dev = document.createElement('span'); dev.className = 'ppp-pin-dev'; dev.textContent = p.device;
+          const meta = document.createElement('span'); meta.className = 'ppp-pin-meta';
+          meta.textContent = p.part + (p.grade ? ' · ' + p.grade : '') + ' · ' + (p.source || 'CP') + (p.price != null ? ' · $' + p.price : '');
+          row.appendChild(del); row.appendChild(dev); row.appendChild(meta);
+          pinsListEl.appendChild(row);
+        });
+      } catch (e) { pinsListEl.textContent = '❌ ' + e.message; }
+    }
+    pinsBox.addEventListener('toggle', () => { if (pinsBox.open) loadPins(); });
+    el.querySelector('#ppp-pins-refresh').onclick = loadPins;
 
     // The grade is a LOCAL choice: it decides which per-grade column a pin lands in.
     // It is not pushed anywhere — the site's default grade lives in config/settings.yml.
